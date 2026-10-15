@@ -1,0 +1,28 @@
+name: Home Library
+version: "1.0.0"
+slug: home_library
+description: Catalog the books in your house. Scan barcodes, pull covers, track loans.
+url: https://github.com/OWNER/REPO
+arch:
+  - aarch64
+  - amd64
+  - armv7
+init: false
+startup: application
+boot: auto
+ingress: true
+ingress_port: 8099
+ingress_stream: false
+panel_icon: mdi:bookshelf
+panel_title: Library
+ports:
+  8099/tcp: null
+ports_description:
+  8099/tcp: Direct access (optional, no login - leave blank to keep it behind Home Assistant)
+backup: hot
+options:
+  google_books_api_key: ""
+  log_level: info
+schema:
+  google_books_api_key: str?
+  log_level: list(debug|info|warning|error)

@@ -1,0 +1,9 @@
+configuration:
+  google_books_api_key:
+    name: Google Books API key
+    description: Optional. Lookups work without one; a key raises Google's daily request limit.
+  log_level:
+    name: Log level
+    description: How much detail to write to the add-on log.
+network:
+  8099/tcp: Direct access to the library without going through Home Assistant. Leave blank unless you need it - this port has no login.

@@ -1,0 +1,15 @@
+# Standalone install (Raspberry Pi or any Docker host):
+#   docker compose up -d --build
+# then open http://<pi-address>:8099
+services:
+  home-library:
+    build: ./home_library
+    container_name: home-library
+    restart: unless-stopped
+    ports:
+      - "8099:8099"
+    volumes:
+      - ./data:/data
+    environment:
+      - TZ=America/Chicago
+      # - GOOGLE_BOOKS_API_KEY=

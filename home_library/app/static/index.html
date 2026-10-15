@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <script>
+    // Relative URLs need a trailing slash (e.g. Home Assistant ingress paths).
+    if (!location.pathname.endsWith("/")) history.replaceState(null, "", location.pathname + "/" + location.search + location.hash);
+  </script>
+  <title>Home Library</title>
+  <meta name="theme-color" content="#24403d" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121a19" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Library">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="static/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;0,7..72,700;1,7..72,400&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="static/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <nav class="nav" aria-label="Main">
+      <a class="brand" href="#/">
+        <img src="static/icon.svg" alt="" width="28" height="28">
+        <span>Home Library</span>
+      </a>
+      <a class="nav-link" href="#/" data-nav="library">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h3v16H4zM9 4h3v16H9zM14.5 4.5l2.9-.8 4.2 15.5-2.9.8z"/></svg>
+        <span>Library</span>
+      </a>
+      <a class="nav-link nav-scan" href="#/scan" data-nav="scan">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V4h3M18 4h3v3M21 17v3h-3M6 20H3v-3M7 8v8M10 8v8M13 8v8M17 8v8"/></svg>
+        <span>Scan</span>
+      </a>
+      <a class="nav-link" href="#/loans" data-nav="loans">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg>
+        <span>Loans</span><b class="nav-badge" id="loanBadge" hidden></b>
+      </a>
+      <a class="nav-link" href="#/add" data-nav="add">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        <span>Add</span>
+      </a>
+      <a class="nav-link" href="#/organize" data-nav="organize">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18M7 3v6M15 9v6M10 15v6"/></svg>
+        <span>Shelves</span>
+      </a>
+    </nav>
+    <main id="view" class="view" tabindex="-1"></main>
+  </div>
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+  <dialog id="modal" class="modal"></dialog>
+  <script src="static/vendor/html5-qrcode.min.js" defer></script>
+  <script src="static/app.js" defer></script>
+</body>
+</html>

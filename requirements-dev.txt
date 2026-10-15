@@ -1,0 +1,2 @@
+-r home_library/requirements.txt
+pytest>=8
