@@ -17,6 +17,16 @@ const store = {
 
 // The signed-in person: { user, via, setup_needed, is_addon }
 let ME = { user: null };
+// Library name and logo, set by the owner on the Account page.
+let BRAND = { name: document.getElementById("brandName")?.textContent || "Home Library", logo_url: "branding/logo-512.png", icon_url: "branding/logo-192.png" };
+
+function applyBrand(b) {
+  BRAND = b;
+  document.title = b.name;
+  const n = $("#brandName"); if (n) n.textContent = b.name;
+  const l = $("#brandLogo"); if (l) l.src = b.icon_url;
+  const f = $("#favicon"); if (f) f.href = b.custom_logo ? b.icon_url : "static/icon.svg";
+}
 const role = () => ME.user?.role || "";
 const isEditor = () => ["editor", "owner"].includes(role());
 const isOwner = () => role() === "owner";
@@ -1114,7 +1124,7 @@ const ROLE_INFO = {
 function authShell(inner) {
   document.body.classList.add("signed-out");
   view.innerHTML = `<div class="auth-wrap"><div class="auth-card">
-    <div class="auth-brand"><img src="static/icon.svg" alt="" width="40" height="40"><span>Home Library</span></div>
+    <div class="auth-brand"><img src="${esc(BRAND.icon_url)}" alt="" width="40" height="40"><span>${esc(BRAND.name)}</span></div>
     ${inner}</div></div>`;
 }
 
@@ -1181,7 +1191,7 @@ async function renderInvite(token) {
         <button class="btn btn-primary">Save and sign in</button>
       </form>` : `
       <h1>You're invited</h1>
-      <p class="muted">${info.library_owner ? `${esc(info.library_owner)} invited you to their book library.` : "You've been invited to a book library."} You'll be able to ${esc(roleDesc.toLowerCase())}.</p>${signedInNote}
+      <p class="muted">${info.library_owner ? `${esc(info.library_owner)} invited you to ${esc(BRAND.name)}.` : `You've been invited to ${esc(BRAND.name)}.`} You'll be able to ${esc(roleDesc.toLowerCase())}.</p>${signedInNote}
       <form id="authForm" class="stack" style="margin-top:18px">
         <label class="field"><span>Your name</span><input name="display_name" required autocomplete="name" placeholder="How the owner will see you"></label>
         <label class="field"><span>Username</span><input name="username" required autocomplete="username" autocapitalize="none" minlength="2"></label>
@@ -1214,7 +1224,90 @@ function showLink(title, link, explain) {
   dlg.showModal();
   $("#linkOut").select();
   $("#copyLink").addEventListener("click", () => copyText(link, $("#linkOut")));
-  $("#shareLink")?.addEventListener("click", () => navigator.share({ title: "Home Library", text: title, url: link }).catch(() => {}));
+  $("#shareLink")?.addEventListener("click", () => navigator.share({ title: BRAND.name, text: title, url: link }).catch(() => {}));
+}
+
+// Turn whatever picture the owner picks into square PNGs in the browser, so the
+// server never needs an image library and only ever stores plain PNG files.
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => resolve({ img, url });
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That file couldn't be opened as a picture")); };
+    img.src = url;
+  });
+}
+
+function renderSquare(img, size, fit, bg) {
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const ctx = c.getContext("2d");
+  const w = img.naturalWidth || img.width || size, h = img.naturalHeight || img.height || size;
+  if (fit === "contain") {
+    if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, size, size); }
+    const pad = size * 0.1;
+    const scale = Math.min((size - 2 * pad) / w, (size - 2 * pad) / h);
+    ctx.drawImage(img, (size - w * scale) / 2, (size - h * scale) / 2, w * scale, h * scale);
+  } else {
+    const scale = Math.max(size / w, size / h);
+    ctx.drawImage(img, (size - w * scale) / 2, (size - h * scale) / 2, w * scale, h * scale);
+  }
+  return c;
+}
+
+const canvasBlob = (c) => new Promise((r) => c.toBlob(r, "image/png"));
+
+function wireBrandForm() {
+  const form = $("#brandForm");
+  if (!form) return;
+  let picked = null, fit = "cover";
+  const nameInput = $("input[name=name]", form);
+  nameInput.addEventListener("input", () => { $("#brandPreviewName").textContent = nameInput.value || "Library"; });
+  const preview = () => {
+    if (!picked) return;
+    $("#brandPreview").src = renderSquare(picked, 192, fit, $("#logoBg").value).toDataURL("image/png");
+  };
+  $("#logoFile").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const { img } = await loadImage(file);
+      picked = img;
+      // Logos with transparency usually look best fitted; photos look best filling.
+      fit = /png|svg/.test(file.type) ? "contain" : "cover";
+      $$("[data-fit]", form).forEach((b) => b.setAttribute("aria-pressed", b.dataset.fit === fit));
+      $("#logoOptions").hidden = false;
+      preview();
+    } catch (err) { fail(err); }
+  });
+  $$("[data-fit]", form).forEach((b) => b.addEventListener("click", () => {
+    fit = b.dataset.fit;
+    $$("[data-fit]", form).forEach((x) => x.setAttribute("aria-pressed", x === b));
+    preview();
+  }));
+  $("#logoBg").addEventListener("input", preview);
+  $("#logoReset")?.addEventListener("click", async () => {
+    try { applyBrand(await api.del("api/branding/logo") ?? await api.get("api/branding")); toast("Default logo restored"); renderAccount(); } catch (err) { fail(err); }
+  });
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = $("button.btn-primary", form); btn.disabled = true;
+    try {
+      const fd = new FormData(form);
+      let b = await api.put("api/branding", { name: fd.get("name").trim(), short_name: (fd.get("short_name") || "").trim() });
+      if (picked) {
+        const up = new FormData();
+        const bg = fit === "contain" ? $("#logoBg").value : null;
+        up.append("logo_512", await canvasBlob(renderSquare(picked, 512, fit, bg)), "logo-512.png");
+        up.append("logo_192", await canvasBlob(renderSquare(picked, 192, fit, bg)), "logo-192.png");
+        b = await request("POST", "api/branding/logo", up);
+      }
+      applyBrand(b);
+      toast("Saved. Phones that already added the library to their home screen may need to re-add it to see a new icon.", { ms: 6000 });
+      renderAccount();
+    } catch (err) { fail(err); btn.disabled = false; }
+  });
 }
 
 async function renderAccount() {
@@ -1249,6 +1342,33 @@ async function renderAccount() {
           </div>
         </form>
         ${owner ? `
+        <form class="panel" id="brandForm">
+          <h2>Library name and logo</h2>
+          <p class="muted" style="margin-bottom:14px">Shown in the browser tab, on the sign-in and invite pages, and on phone home screens.</p>
+          <div class="brand-preview">
+            <div class="app-icon"><img id="brandPreview" src="${esc(BRAND.logo_url)}" alt="Current logo"></div>
+            <div><strong id="brandPreviewName">${esc(BRAND.name)}</strong><p class="small muted">How it looks on a home screen</p></div>
+          </div>
+          <div class="stack" style="margin-top:14px">
+            <label class="field"><span>Library name</span><input name="name" value="${esc(BRAND.name)}" required maxlength="60"></label>
+            <label class="field"><span>Short name for home screens (optional)</span><input name="short_name" value="${esc(BRAND.custom_short ? BRAND.short_name : "")}" maxlength="20" placeholder="${esc(BRAND.short_name)}"></label>
+            <div class="field"><span>Logo</span>
+              <div class="btn-row">
+                <label class="btn btn-sm">Choose a picture<input type="file" id="logoFile" accept="image/*" hidden></label>
+                ${BRAND.custom_logo ? `<button type="button" class="btn btn-sm btn-quiet" id="logoReset">Use the default logo</button>` : ""}
+              </div>
+              <div class="logo-options" id="logoOptions" hidden>
+                <div class="segmented" role="group" aria-label="How the picture fits">
+                  <button type="button" data-fit="cover" aria-pressed="true">Fill square</button>
+                  <button type="button" data-fit="contain" aria-pressed="false">Fit inside</button>
+                </div>
+                <label class="small muted" style="display:flex;gap:8px;align-items:center">Background <input type="color" id="logoBg" value="#ffffff" aria-label="Background color"></label>
+              </div>
+              <small class="muted">Square pictures work best. PNG with a transparent background, JPG, or SVG.</small>
+            </div>
+            <div><button class="btn btn-primary">Save name and logo</button></div>
+          </div>
+        </form>
         <form class="panel" id="urlForm">
           <h2>Library address for friends</h2>
           <p class="muted" style="margin-bottom:12px">The web address friends use to reach the library, outside Home Assistant. Invite links are built from it. See the README for setting one up with a Cloudflare Tunnel or Tailscale.</p>
@@ -1302,6 +1422,7 @@ async function renderAccount() {
   });
   if (!owner) return;
 
+  wireBrandForm();
   $("#urlForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     try { await api.put("api/settings", { public_url: new FormData(e.target).get("public_url") }); toast("Address saved"); } catch (err) { fail(err); }
@@ -1370,8 +1491,10 @@ function applyRole() {
 }
 
 async function boot() {
+  const brand = api.get("api/branding").then(applyBrand).catch(() => {});
   try { ME = await api.get("api/auth/me"); }
   catch (err) { ME = { user: null }; }
+  await brand;
   applyRole();
   route();
 }

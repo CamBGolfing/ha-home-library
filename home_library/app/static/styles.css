@@ -305,3 +305,11 @@ input[type=color] { width: 42px; height: 42px; padding: 3px; border: 1px solid v
 .cam-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .cam-tools select { width: auto; min-height: 34px; padding: 4px 28px 4px 10px; font-size: 14px; max-width: 100%; }
 .cam-tools .btn[aria-pressed="true"] { background: var(--gilt); border-color: var(--gilt); color: #1d1608; }
+
+/* ---------- branding ---------- */
+.brand img, .auth-brand img { border-radius: 7px; object-fit: cover; box-shadow: 0 0 0 1px var(--line); }
+.brand span { overflow: hidden; text-overflow: ellipsis; }
+.brand-preview { display: flex; gap: 14px; align-items: center; padding: 14px; border-radius: 12px; background: var(--paper); }
+.app-icon { width: 72px; height: 72px; border-radius: 17px; overflow: hidden; flex: none; box-shadow: var(--shadow); background: var(--surface); }
+.app-icon img { width: 100%; height: 100%; object-fit: cover; }
+.logo-options { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 6px 0 2px; }

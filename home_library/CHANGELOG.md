@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.0
+
+- Name your library and give it your own logo. The owner sets both under Account, with a live preview of the home-screen icon.
+- The name and logo show in the browser tab, the header, the sign-in and invite pages, and when someone adds the library to their phone's home screen.
+- Pictures are cropped or fitted to a square in the browser before upload, so any PNG, JPG or SVG works and the server only ever stores PNG files.
+
 ## 1.2.0
 
 - Much more reliable scanning on iPhone. Safari has no built-in barcode reader, so the app now uses ZXing (C++, compiled to WebAssembly) instead of the old JavaScript decoder. In testing on the same set of photos it read more than three times as many barcodes. Chrome on Android keeps using its built-in reader.

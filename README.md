@@ -15,6 +15,7 @@ Runs as a Home Assistant add-on (with a sidebar panel) or as a plain Docker cont
 - **No barcode?** Search by title or author, type an ISBN, or enter it by hand. Snap a photo to use as the cover.
 - **Export.** Download everything as CSV. On Home Assistant, the library is included in normal HA backups.
 - **Share with family and friends.** Family signs in through Home Assistant. Friends get invite links to library-only accounts, browse what you have, and ask to borrow.
+- **Your name and logo.** Call it whatever you like and upload your own logo; it's used everywhere, including the home-screen icon.
 - **Installable.** Add it to your phone's home screen and it opens like an app.
 
 ## Install on Home Assistant
@@ -88,6 +89,12 @@ Tailscale also works if your friends are on your tailnet (share the device with 
 **3. Invite people.** On the same page, choose what they can do and click **Make invite link**. Send them the link. It works once and expires after 7 days. They pick a username and password and land in the library.
 
 On the Account page you can also change anyone's access, turn someone's access off, remove them, or make a password reset link.
+
+### Name and logo
+
+As the owner, open **Account → Library name and logo**. Type a name (and optionally a shorter one for phone home screens), choose a picture, and pick **Fill square** (crops to fit, good for photos) or **Fit inside** (keeps the whole logo with a background color, good for logos). The preview shows how the home-screen icon will look. Click **Save name and logo**.
+
+Phones that already added the library to their home screen keep the old icon until they remove it and add it again. The Home Assistant sidebar label ("Library") is set by the add-on and doesn't change.
 
 ### Security notes
 

@@ -1,5 +1,6 @@
 """Home Library: a small self-hosted catalog for the books in your house."""
 import csv
+from html import escape
 import io
 import logging
 import mimetypes
@@ -11,7 +12,7 @@ from datetime import date
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -35,7 +36,7 @@ async def lifespan(_app):
 
 app = FastAPI(title="Home Library", docs_url="/api/docs", openapi_url="/api/openapi.json", lifespan=lifespan)
 
-OPEN_PATHS = {"/api/health", "/api/auth/me", "/api/auth/login", "/api/auth/setup", "/api/auth/logout"}
+OPEN_PATHS = {"/api/health", "/api/auth/me", "/api/auth/login", "/api/auth/setup", "/api/auth/logout", "/api/branding"}
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
@@ -163,6 +164,11 @@ class InviteIn(BaseModel):
 
 class SettingsIn(BaseModel):
     public_url: str = ""
+
+
+class BrandingIn(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    short_name: str = Field("", max_length=20)
 
 
 class RequestIn(BaseModel):
@@ -987,6 +993,92 @@ def export_csv():
                              headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+# ---------------------------------------------------------------- branding
+
+DEFAULT_NAME = "Home Library"
+DEFAULT_SHORT = "Library"
+BRANDING_DIR = db.DATA_DIR / "branding"
+LOGO_SIZES = (512, 192)
+MAX_LOGO_BYTES = 2 * 1024 * 1024
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def _branding(conn=None) -> dict:
+    def read(c):
+        name = db.get_setting(c, "library_name") or DEFAULT_NAME
+        short = db.get_setting(c, "library_short_name") or (name if len(name) <= 12 else DEFAULT_SHORT)
+        version = db.get_setting(c, "logo_version")
+        return {"name": name, "short_name": short, "custom_short": bool(db.get_setting(c, "library_short_name")),
+                "custom_logo": bool(version),
+                "version": version or "default"}
+    if conn is not None:
+        return read(conn)
+    with db.connect() as c:
+        return read(c)
+
+
+def _logo_path(size: int):
+    p = BRANDING_DIR / f"logo-{size}.png"
+    return p if p.exists() else None
+
+
+@app.get("/api/branding")
+def get_branding():
+    b = _branding()
+    v = b["version"]
+    return b | {"logo_url": f"branding/logo-512.png?v={v}", "icon_url": f"branding/logo-192.png?v={v}"}
+
+
+@app.put("/api/branding", dependencies=[Depends(owner)])
+def put_branding(body: BrandingIn):
+    with db.connect() as conn:
+        db.set_setting(conn, "library_name", body.name.strip())
+        db.set_setting(conn, "library_short_name", body.short_name.strip())
+    return get_branding()
+
+
+@app.post("/api/branding/logo", dependencies=[Depends(owner)])
+async def upload_logo(logo_512: UploadFile = File(...), logo_192: UploadFile = File(...)):
+    """The browser resizes the picture to square PNGs before upload, so the server
+    needs no image library and never stores SVG or other active content."""
+    files = {}
+    for size, up in ((512, logo_512), (192, logo_192)):
+        data = await up.read(MAX_LOGO_BYTES + 1)
+        if len(data) > MAX_LOGO_BYTES:
+            raise HTTPException(413, "That logo is too large")
+        if not data.startswith(PNG_MAGIC):
+            raise HTTPException(400, "Logos need to be uploaded as PNG")
+        files[size] = data
+    BRANDING_DIR.mkdir(parents=True, exist_ok=True)
+    for size, data in files.items():
+        tmp = BRANDING_DIR / f"logo-{size}.png.tmp"
+        tmp.write_bytes(data)
+        tmp.replace(BRANDING_DIR / f"logo-{size}.png")
+    with db.connect() as conn:
+        db.set_setting(conn, "logo_version", uuid.uuid4().hex[:10])
+    return get_branding()
+
+
+@app.delete("/api/branding/logo", dependencies=[Depends(owner)])
+def reset_logo():
+    for size in LOGO_SIZES:
+        (BRANDING_DIR / f"logo-{size}.png").unlink(missing_ok=True)
+    with db.connect() as conn:
+        db.set_setting(conn, "logo_version", "")
+    return get_branding()
+
+
+@app.get("/branding/logo-{size}.png")
+def logo_file(size: int):
+    if size not in LOGO_SIZES:
+        raise HTTPException(404)
+    custom = _logo_path(size)
+    cache = {"Cache-Control": "public, max-age=31536000, immutable"}
+    if custom:
+        return FileResponse(custom, media_type="image/png", headers=cache)
+    return FileResponse(STATIC_DIR / f"icon-{size}.png", media_type="image/png", headers=cache)
+
+
 # ---------------------------------------------------------------- static
 
 db.DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -997,9 +1089,33 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/manifest.webmanifest")
 def manifest():
-    return FileResponse(STATIC_DIR / "manifest.webmanifest", media_type="application/manifest+json")
+    b = _branding()
+    v = b["version"]
+    icons = [{"src": f"branding/logo-{s}.png?v={v}", "sizes": f"{s}x{s}", "type": "image/png", "purpose": "any"}
+             for s in LOGO_SIZES]
+    if not b["custom_logo"]:
+        icons.insert(0, {"src": "static/icon.svg", "sizes": "any", "type": "image/svg+xml"})
+    body = {
+        "name": b["name"], "short_name": b["short_name"],
+        "description": "The books in our house: scan, find, lend.",
+        "start_url": "./", "scope": "./", "display": "standalone",
+        "background_color": "#f3f5f2", "theme_color": "#24403d", "icons": icons,
+    }
+    return JSONResponse(body, media_type="application/manifest+json", headers={"Cache-Control": "no-cache"})
+
+
+INDEX_TEMPLATE = (STATIC_DIR / "index.html").read_text()
 
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+    """The app shell, with the library's name and icon filled in so they show up in
+    the browser tab and when someone adds the library to their home screen."""
+    b = _branding()
+    v = b["version"]
+    html = (INDEX_TEMPLATE
+            .replace("{{LIBRARY_NAME}}", escape(b["name"]))
+            .replace("{{SHORT_NAME}}", escape(b["short_name"]))
+            .replace("{{ICON_192}}", f"branding/logo-192.png?v={v}")
+            .replace("{{FAVICON}}", f"branding/logo-192.png?v={v}" if b["custom_logo"] else "static/icon.svg"))
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})

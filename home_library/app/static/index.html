@@ -7,25 +7,25 @@
     // Relative URLs need a trailing slash (e.g. Home Assistant ingress paths).
     if (!location.pathname.endsWith("/")) history.replaceState(null, "", location.pathname + "/" + location.search + location.hash);
   </script>
-  <title>Home Library</title>
+  <title>{{LIBRARY_NAME}}</title>
   <meta name="theme-color" content="#24403d" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#121a19" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="Library">
+  <meta name="apple-mobile-web-app-title" content="{{SHORT_NAME}}">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" href="static/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="static/icon-192.png">
+  <link rel="icon" href="{{FAVICON}}" id="favicon">
+  <link rel="apple-touch-icon" href="{{ICON_192}}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;0,7..72,700;1,7..72,400&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="static/styles.css?v=1.2.0">
+  <link rel="stylesheet" href="static/styles.css?v=1.3.0">
 </head>
 <body>
   <div class="shell">
     <nav class="nav" aria-label="Main">
       <a class="brand" href="#/">
-        <img src="static/icon.svg" alt="" width="28" height="28">
-        <span>Home Library</span>
+        <img src="{{ICON_192}}" alt="" width="28" height="28" id="brandLogo">
+        <span id="brandName">{{LIBRARY_NAME}}</span>
       </a>
       <a class="nav-link" href="#/" data-nav="library" data-min-role="viewer" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h3v16H4zM9 4h3v16H9zM14.5 4.5l2.9-.8 4.2 15.5-2.9.8z"/></svg>
@@ -52,8 +52,8 @@
   </div>
   <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
   <dialog id="modal" class="modal"></dialog>
-  <script src="static/vendor/barcode-detector.js?v=1.2.0" defer></script>
-  <script src="static/scanner.js?v=1.2.0" defer></script>
-  <script src="static/app.js?v=1.2.0" defer></script>
+  <script src="static/vendor/barcode-detector.js?v=1.3.0" defer></script>
+  <script src="static/scanner.js?v=1.3.0" defer></script>
+  <script src="static/app.js?v=1.3.0" defer></script>
 </body>
 </html>
