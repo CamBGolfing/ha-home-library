@@ -20,7 +20,7 @@ Runs as a Home Assistant add-on (with a sidebar panel) or as a plain Docker cont
 
 1. In Home Assistant go to **Settings → Add-ons → Add-on Store**, open the **⋮** menu, choose **Repositories**, and add:
    ```
-   https://github.com/OWNER/REPO
+   https://github.com/CamBGolfing/ha-home-library
    ```
 2. Find **Home Library** in the store, install it, and start it. Turn on **Show in sidebar**.
 3. Open **Library** from the sidebar.
@@ -45,7 +45,7 @@ The add-on also has an optional direct port (8099). It's off by default. The app
 ## Install on a Raspberry Pi with Docker
 
 ```bash
-git clone https://github.com/OWNER/REPO home-library
+git clone https://github.com/CamBGolfing/ha-home-library home-library
 cd home-library
 docker compose up -d --build
 ```
