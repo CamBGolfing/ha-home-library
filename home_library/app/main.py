@@ -2,6 +2,7 @@
 import csv
 import io
 import logging
+import mimetypes
 import os
 import secrets
 import uuid
@@ -21,6 +22,7 @@ logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper())
 log = logging.getLogger("library")
 
 STATIC_DIR = Path(__file__).parent / "static"
+mimetypes.add_type("application/wasm", ".wasm")  # lets browsers stream-compile the barcode decoder
 MAX_COVER_BYTES = 8 * 1024 * 1024
 
 

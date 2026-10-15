@@ -1,5 +1,5 @@
 name: Home Library
-version: "1.1.0"
+version: "1.2.0"
 slug: home_library
 description: Catalog the books in your house. Scan barcodes, pull covers, track loans.
 url: https://github.com/CamBGolfing/ha-home-library

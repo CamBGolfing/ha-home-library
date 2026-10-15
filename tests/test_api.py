@@ -89,3 +89,7 @@ def test_cover_upload_and_export(client):
 def test_frontend_served(client):
     assert "Home Library" in client.get("/").text
     assert client.get("/static/app.js").status_code == 200
+    assert client.get("/static/scanner.js").status_code == 200
+    wasm = client.get("/static/vendor/zxing_reader.wasm")
+    assert wasm.status_code == 200 and wasm.headers["content-type"] == "application/wasm"
+    assert wasm.content[:4] == b"\0asm"

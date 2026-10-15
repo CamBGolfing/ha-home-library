@@ -223,10 +223,9 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--gilt); outl
 .viewfinder {
   position: relative; border-radius: 14px; overflow: hidden; background: #0d1312; aspect-ratio: 4 / 3; color: #e6ece9;
 }
-.viewfinder #reader { width: 100%; height: 100%; }
-.viewfinder #reader video { width: 100% !important; height: 100% !important; object-fit: cover; }
+.viewfinder video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .viewfinder .reticle {
-  position: absolute; left: 10%; right: 10%; top: 32%; bottom: 32%; pointer-events: none;
+  position: absolute; left: 7%; right: 7%; top: 28%; bottom: 28%; pointer-events: none;
   border: 2px solid rgba(217,172,75,.9); border-radius: 8px; box-shadow: 0 0 0 9999px rgba(0,0,0,.35);
 }
 .viewfinder .reticle::after { content: ""; position: absolute; left: 6%; right: 6%; top: 50%; height: 2px; background: #e8c46f; opacity: .8; animation: sweep 1.8s ease-in-out infinite alternate; }
@@ -235,7 +234,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--gilt); outl
 .viewfinder.flash .reticle { border-color: #7cc39f; box-shadow: 0 0 0 9999px rgba(47,107,79,.35); }
 .viewfinder .vf-msg { position: absolute; inset: 0; display: grid; place-content: center; gap: 14px; text-align: center; padding: 24px; }
 .viewfinder .vf-msg p { max-width: 36ch; color: #b8c4c0; }
-#reader__dashboard, #reader img[alt="Info icon"] { display: none !important; }
 
 .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; padding: 3px; background: var(--surface); }
 .segmented button { border: 0; background: none; padding: 7px 14px; border-radius: 6px; font-weight: 600; font-size: 14px; cursor: pointer; color: var(--muted); }
@@ -303,3 +301,7 @@ input[type=color] { width: 42px; height: 42px; padding: 3px; border: 1px solid v
   .row.stack-mobile .grow { flex-basis: calc(100% - 58px); }
   .row.stack-mobile .btn-row { margin-left: 58px; }
 }
+
+.cam-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.cam-tools select { width: auto; min-height: 34px; padding: 4px 28px 4px 10px; font-size: 14px; max-width: 100%; }
+.cam-tools .btn[aria-pressed="true"] { background: var(--gilt); border-color: var(--gilt); color: #1d1608; }

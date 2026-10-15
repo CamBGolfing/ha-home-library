@@ -32,6 +32,13 @@ The add-on builds locally on first install, which takes a few minutes on a Pi.
 
 Browsers only allow camera access on secure (HTTPS) pages. If you reach Home Assistant over HTTPS (Nabu Casa, Let's Encrypt, or a reverse proxy), scanning works from the sidebar. Over plain `http://homeassistant.local:8123`, the camera is blocked by the browser; you can still type ISBNs or use a USB/Bluetooth barcode scanner (they act like a keyboard, just scan into the box on the Scan page).
 
+### Scanning tips
+
+- Hold the barcode about 6 inches (15 cm) from the camera. It doesn't need to fill the box. Newer Pro iPhones can't focus any closer with the main lens, so too close is the most common reason a scan doesn't catch.
+- If your phone shows a camera list on the Scan page, try the other back cameras. On iPhone, "Back Triple Camera" or "Back Dual Wide Camera" can switch to the close-up lens.
+- **Zoom 2x** (when shown) lets you hold the phone farther back while keeping the barcode big.
+- **Take a photo** always works: it opens the phone's own camera, which focuses up close, and reads the barcode from the picture.
+
 If the camera is blocked inside the Home Assistant panel (some browsers and the companion app don't pass camera permission into embedded pages), the Scan page offers an **Open in its own tab** button.
 
 ### Options
@@ -178,6 +185,6 @@ tests/                   API tests (network stubbed)
 docker-compose.yml       Standalone install
 ```
 
-Barcode scanning uses [html5-qrcode](https://github.com/mebjas/html5-qrcode) (Apache 2.0), vendored so the app doesn't depend on a CDN. It uses the browser's native barcode detector when available.
+Barcode scanning uses the browser's built-in barcode detector where one exists (Chrome on Android), and otherwise [zxing-cpp](https://github.com/zxing-cpp/zxing-cpp) compiled to WebAssembly via [zxing-wasm](https://github.com/Sec-ant/zxing-wasm) and the [barcode-detector](https://github.com/Sec-ant/barcode-detector) ponyfill (MIT; zxing-cpp is Apache 2.0). Both are vendored so the app works offline and doesn't depend on a CDN.
 
 Book data comes from [Open Library](https://openlibrary.org/developers/api) and [Google Books](https://developers.google.com/books).

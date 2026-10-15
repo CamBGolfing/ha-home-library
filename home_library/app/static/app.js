@@ -663,7 +663,7 @@ async function renderScan() {
   const inFrame = window.self !== window.top;
 
   view.innerHTML = `
-    <div class="page-head"><div><h1>Scan books</h1><p class="muted">Point the camera at the barcode on the back cover.</p></div>
+    <div class="page-head"><div><h1>Scan books</h1><p class="muted">Hold the barcode about 6 inches (15 cm) from the camera. It doesn't need to fill the box.</p></div>
       <div class="segmented" role="group" aria-label="When a book is scanned">
         <button type="button" data-mode="ask">Ask first</button>
         <button type="button" data-mode="instant">Add instantly</button>
@@ -671,10 +671,17 @@ async function renderScan() {
     <div class="scan-layout">
       <div class="stack">
         <div class="viewfinder" id="vf">
-          <div id="reader"></div>
+          <video id="camVideo" playsinline muted autoplay></video>
           <div class="reticle" id="reticle" hidden></div>
           <div class="vf-msg" id="vfMsg"><div class="spinner" style="margin:auto"></div><p>Starting the camera...</p></div>
         </div>
+        <div class="cam-tools" id="camTools">
+          <select id="camPick" aria-label="Camera" hidden></select>
+          <button type="button" class="btn btn-sm" id="zoomBtn" hidden>Zoom 2x</button>
+          <button type="button" class="btn btn-sm" id="torchBtn" aria-pressed="false" hidden>Light</button>
+          <label class="btn btn-sm">Take a photo<input type="file" id="photoScan" accept="image/*" capture="environment" hidden></label>
+        </div>
+        <p class="small muted" id="camHint" hidden></p>
         <form id="manualCode" class="inline-form nowrap" style="margin-top:0">
           <input name="code" id="codeInput" inputmode="numeric" placeholder="Or type / use a USB scanner" aria-label="Barcode or ISBN" autocomplete="off">
           <button class="btn">Look up</button>
@@ -734,8 +741,8 @@ async function renderScan() {
 
   // Scanner
   let scanner = null, busy = false, last = { code: "", at: 0 };
-  const pause = () => { try { scanner?.pause(true); } catch { /* not running */ } };
-  const resume = () => { busy = false; try { scanner?.resume(); } catch { /* not paused */ } };
+  const pause = () => { scanner?.pause(); };
+  const resume = () => { busy = false; scanner?.resume(); };
 
   const handleCode = async (raw, { fromCamera = true } = {}) => {
     const code = String(raw).replace(/[^0-9Xx]/g, "");
@@ -848,30 +855,92 @@ async function renderScan() {
     $("#codeInput").focus();
   };
 
+  // Photo fallback: the phone's own camera app focuses up close, then we read the picture.
+  $("#photoScan").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    pause();
+    try {
+      const code = await BookScanner.decodeImageFile(file);
+      if (code) { busy = false; await handleCode(code, { fromCamera: false }); }
+      else { toast("Couldn't find a barcode in that photo. Try again a little farther back, with the barcode level.", { error: true, ms: 6000 }); resume(); }
+    } catch (err) { fail(err); resume(); }
+  });
+
+  const setupCameraTools = () => {
+    // Lens picker, when the phone exposes more than one back camera.
+    const pick = $("#camPick");
+    if (scanner.cameras.length > 1) {
+      const current = scanner.deviceId();
+      pick.innerHTML = scanner.cameras.map((c, i) =>
+        `<option value="${esc(c.deviceId)}" ${c.deviceId === current ? "selected" : ""}>${esc(c.label || `Camera ${i + 1}`)}</option>`).join("");
+      pick.hidden = false;
+      pick.onchange = async () => {
+        try { await scanner.useCamera(pick.value); setupCameraTools(); } catch (err) { fail(err); }
+      };
+    } else pick.hidden = true;
+
+    // Zoom lets you hold the phone back past the minimum focus distance.
+    const zoomBtn = $("#zoomBtn");
+    const z = scanner.zoomRange();
+    if (z && z.max >= 1.5) {
+      const steps = [1, 2, 3].filter((v) => v <= z.max);
+      zoomBtn.hidden = false;
+      const label = () => { zoomBtn.textContent = `Zoom ${Math.round(scanner.currentZoom())}x`; };
+      label();
+      zoomBtn.onclick = async () => {
+        const cur = Math.round(scanner.currentZoom());
+        const next = steps[(steps.indexOf(cur) + 1) % steps.length] || 1;
+        try { await scanner.setZoom(next); } catch { /* not supported after all */ }
+        label();
+      };
+    } else zoomBtn.hidden = true;
+
+    const torchBtn = $("#torchBtn");
+    if (scanner.hasTorch()) {
+      torchBtn.hidden = false;
+      torchBtn.onclick = async () => {
+        const on = torchBtn.getAttribute("aria-pressed") !== "true";
+        try { await scanner.setTorch(on); torchBtn.setAttribute("aria-pressed", on); } catch (err) { fail(err); }
+      };
+    } else torchBtn.hidden = true;
+
+    const hint = $("#camHint");
+    const isApple = /iPhone|iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (isApple) {
+      hint.hidden = false;
+      hint.textContent = scanner.cameras.length > 1
+        ? "Blurry up close? Pull the phone back a bit, or try another camera from the list. Take a photo always works."
+        : "Blurry up close? Pull the phone back a bit, or use Take a photo.";
+    }
+  };
+
   const startCamera = async () => {
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       cameraProblem("Camera needs a secure connection",
-        "Browsers only allow the camera over HTTPS. Open the library through your HTTPS address (Home Assistant with SSL, Nabu Casa, or a reverse proxy). A USB barcode scanner or typing the ISBN below works anywhere.");
+        "Browsers only allow the live camera over HTTPS. Open the library through your HTTPS address (Home Assistant with SSL, Nabu Casa, or a reverse proxy). Take a photo, a USB barcode scanner, or typing the ISBN below work anywhere.");
       return;
     }
-    if (typeof Html5Qrcode === "undefined") { cameraProblem("Scanner didn't load", "Reload the page and try again.", { retry: true }); return; }
-    const F = Html5QrcodeSupportedFormats;
-    scanner = new Html5Qrcode("reader", {
-      formatsToSupport: [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E],
-      verbose: false,
-      experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+    if (typeof BookScanner === "undefined") { cameraProblem("Scanner didn't load", "Reload the page and try again.", { retry: true }); return; }
+    scanner = new BookScanner($("#camVideo"), {
+      box: $("#reticle"),
+      onDetect: (code) => handleCode(code),
+      onError: (err) => console.warn("scan", err),
     });
     try {
-      await scanner.start({ facingMode: "environment" }, { fps: 12, aspectRatio: 4 / 3, disableFlip: true }, (text) => handleCode(text), () => {});
+      $("#reticle").hidden = false;   // needed to map the box onto the video
+      await scanner.start();
       if (!$("#vf")) { await stop(); return; } // navigated away while starting
-      vfMsg.hidden = true; $("#reticle").hidden = false;
+      vfMsg.hidden = true;
+      setupCameraTools();
     } catch (err) {
       scanner = null;
       const name = err?.name || String(err);
       if (/NotAllowed|Permission/i.test(name)) {
         cameraProblem("Camera access was blocked",
-          inFrame ? "This page is inside another app (like Home Assistant), which may not pass the camera through. Open it in its own tab, or allow camera access in your browser settings."
-                  : "Allow camera access for this site in your browser settings, then try again.", { retry: true });
+          inFrame ? "This page is inside another app (like Home Assistant), which may not pass the camera through. Open it in its own tab, or allow camera access in your browser settings. Take a photo still works."
+                  : "Allow camera access for this site in your browser settings, then try again. Take a photo still works.", { retry: true });
       } else if (/NotFound|Overconstrained/i.test(name)) {
         cameraProblem("No camera found", "This device doesn't seem to have a camera. Use a USB scanner or type the ISBN below.");
       } else {
@@ -882,7 +951,7 @@ async function renderScan() {
 
   const stop = async () => {
     const s = scanner; scanner = null;
-    if (s) { try { if (s.isScanning) await s.stop(); s.clear(); } catch { /* already stopped */ } }
+    if (s) await s.stop();
   };
   const onVisibility = () => { if (document.hidden) pause(); else if (!busy) resume(); };
   document.addEventListener("visibilitychange", onVisibility);

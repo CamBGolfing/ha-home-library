@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0
+
+- Much more reliable scanning on iPhone. Safari has no built-in barcode reader, so the app now uses ZXing (C++, compiled to WebAssembly) instead of the old JavaScript decoder. In testing on the same set of photos it read more than three times as many barcodes. Chrome on Android keeps using its built-in reader.
+- Reads the area inside the on-screen box at the camera's full resolution, and asks the camera for 1080p.
+- On iPhones with several back lenses, prefers Apple's multi-lens camera, which can switch to the close-focus lens. A camera picker appears when there's more than one back camera, and your choice is remembered.
+- Zoom and flashlight buttons when the camera supports them.
+- New "Take a photo" option: snap the barcode with the phone's own camera app (which always focuses up close) and the app reads the picture.
+
 ## 1.1.0
 
 - Accounts and sign-in. Three levels of access: Owner, Family (add, edit, lend) and Friend (browse and ask to borrow).
