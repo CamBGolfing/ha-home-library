@@ -14,6 +14,7 @@ Runs as a Home Assistant add-on (with a sidebar panel) or as a plain Docker cont
 - **Loans.** Lend a book to someone with an optional due date; overdue loans are flagged in the nav and library.
 - **No barcode?** Search by title or author, type an ISBN, or enter it by hand. Snap a photo to use as the cover.
 - **Export.** Download everything as CSV. On Home Assistant, the library is included in normal HA backups.
+- **Share with family and friends.** Family signs in through Home Assistant. Friends get invite links to library-only accounts, browse what you have, and ask to borrow.
 - **Installable.** Add it to your phone's home screen and it opens like an app.
 
 ## Install on Home Assistant
@@ -23,7 +24,7 @@ Runs as a Home Assistant add-on (with a sidebar panel) or as a plain Docker cont
    https://github.com/CamBGolfing/ha-home-library
    ```
 2. Find **Home Library** in the store, install it, and start it. Turn on **Show in sidebar**.
-3. Open **Library** from the sidebar.
+3. Open **Library** from the sidebar. The first person to open it becomes the library's owner, so do this yourself right after installing.
 
 The add-on builds locally on first install, which takes a few minutes on a Pi.
 
@@ -37,10 +38,55 @@ If the camera is blocked inside the Home Assistant panel (some browsers and the 
 
 | Option | What it does |
 | --- | --- |
+| `ha_user_role` | What Home Assistant users can do the first time they open the library: `editor` (add, edit and lend; the default) or `viewer` (browse and ask to borrow). Change anyone later on the Account page. |
 | `google_books_api_key` | Optional. Lookups work without it; a key raises Google's daily request limit. |
 | `log_level` | `debug`, `info`, `warning` or `error`. |
 
-The add-on also has an optional direct port (8099). It's off by default. The app has no login of its own, so only turn that on for a trusted network.
+## Sharing with family and friends
+
+There are three levels of access:
+
+| Level | Can |
+| --- | --- |
+| **Owner** | Everything, including inviting people and changing access |
+| **Family** | Scan, add, edit and lend books |
+| **Friend** | Browse and search, ask to borrow, see what they've borrowed. They see that a book is checked out, but not who has it, and don't see your private notes. |
+
+### Family (people with a Home Assistant login)
+
+1. In Home Assistant, go to **Settings → People → Add person**, turn on **Allow person to login**, and leave **Administrator** off.
+2. They open **Library** from the sidebar and are signed in automatically as Family.
+
+Library only trusts Home Assistant's sign-in for requests that come through Home Assistant itself, so this can't be faked from outside.
+
+### Friends (no Home Assistant access)
+
+Friends use the library's own address and a library account. They never see or touch Home Assistant.
+
+**1. Give the library its own address.** The easiest way is a Cloudflare Tunnel, which needs a domain on Cloudflare and keeps everything on HTTPS without opening ports on your router.
+
+- On the Home Library add-on's **Configuration** tab, under **Network**, set port `8099` to `8099` and restart the add-on.
+- Install the [Cloudflared add-on](https://github.com/brenner-tobias/addon-cloudflared). To share *only* the library and not Home Assistant, leave `external_hostname` empty and add:
+  ```yaml
+  additional_hosts:
+    - hostname: library.yourdomain.com
+      service: http://<your-home-assistant-ip>:8099
+  ```
+- Start Cloudflared and follow its log to link it to your Cloudflare account.
+
+Tailscale also works if your friends are on your tailnet (share the device with them), or use Tailscale Funnel for a public HTTPS address.
+
+**2. Tell the library its address.** In Library, open **Account** and enter it under **Library address for friends**, e.g. `https://library.yourdomain.com`.
+
+**3. Invite people.** On the same page, choose what they can do and click **Make invite link**. Send them the link. It works once and expires after 7 days. They pick a username and password and land in the library.
+
+On the Account page you can also change anyone's access, turn someone's access off, remove them, or make a password reset link.
+
+### Security notes
+
+- Sign-in attempts are rate limited, passwords are stored with scrypt, and sessions last 30 days.
+- Only expose the direct port over HTTPS (a tunnel or reverse proxy). Don't forward port 8099 on your router as plain HTTP.
+- Turning someone's access off signs them out right away.
 
 ## Install on a Raspberry Pi with Docker
 
@@ -50,7 +96,7 @@ cd home-library
 docker compose up -d --build
 ```
 
-Open `http://<pi-address>:8099`. Data (database and covers) lives in `./data`.
+Open `http://<pi-address>:8099` and create the owner account. Then invite people from the **Account** page. Data (database and covers) lives in `./data`.
 
 For phone scanning you'll want HTTPS in front of it, e.g. Caddy, Nginx Proxy Manager, Traefik, or a Tailscale HTTPS cert (`tailscale serve`).
 
@@ -101,7 +147,9 @@ The app is a JSON API with a web front end. Interactive docs are at `/api/docs`.
 - `GET /api/lookup/{isbn}` look up a barcode, also reports if you already own it
 - `POST /api/quick-add` `{"code": "978...", "shelf_id": 1, "tags": ["Kids"]}` scan-and-add in one call
 - `GET /api/books?q=tolkien&shelf=2&tag=3&status=owned&loaned=true`
-- `GET /api/stats` counts for dashboards (works nicely with a Home Assistant REST sensor)
+- `GET /api/stats` counts for dashboards
+
+Every endpoint needs a signed-in session, and writes need an `X-Library-Request: 1` header (protection against cross-site requests).
 - `GET /api/export.csv`
 
 ## Development
@@ -122,7 +170,8 @@ home_library/            The add-on (also the Docker build context)
   run.py                 Entry point, reads HA options
   app/
     main.py              FastAPI routes
-    db.py                SQLite schema
+    db.py                SQLite schema and migrations
+    auth.py              Accounts, sessions, roles, Home Assistant sign-in
     lookup.py            Open Library + Google Books lookups, ISBN helpers
     static/              Front end (plain JS, no build step)
 tests/                   API tests (network stubbed)

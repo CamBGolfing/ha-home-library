@@ -17,6 +17,8 @@ if options_file.exists():
             os.environ.setdefault("GOOGLE_BOOKS_API_KEY", opts["google_books_api_key"])
         if opts.get("log_level"):
             os.environ.setdefault("LOG_LEVEL", opts["log_level"])
+        if opts.get("ha_user_role"):
+            os.environ.setdefault("HA_USER_ROLE", opts["ha_user_role"])
     except (OSError, ValueError) as e:
         print(f"Could not read add-on options: {e}")
 
@@ -26,6 +28,8 @@ if __name__ == "__main__":
         host=os.environ.get("HOST", "0.0.0.0"),
         port=int(os.environ.get("PORT", "8099")),
         log_level=os.environ.get("LOG_LEVEL", "info").lower(),
-        proxy_headers=True,
-        forwarded_allow_ips="*",
+        # Keep the real peer address: Home Assistant sign-in is trusted only for
+        # connections that actually come from the Supervisor, so forwarded headers
+        # must never be allowed to rewrite it.
+        proxy_headers=False,
     )

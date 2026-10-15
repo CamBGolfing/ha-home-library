@@ -1,60 +1,7 @@
-"""API tests. Network lookups are stubbed so these run offline.
-
-Run from the repo root:  pip install -r requirements-dev.txt && pytest
-"""
-import importlib
-import os
-import sys
-from pathlib import Path
-
-import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "home_library"))
-
-HOBBIT_OL = {
-    "title": "The Hobbit", "subtitle": "", "authors": "J.R.R. Tolkien",
-    "publisher": "Houghton Mifflin Harcourt", "published": "2012", "pages": 300,
-    "subjects": "Fantasy", "isbn10": "054792822X", "isbn13": "9780547928227",
-    "cover_urls": ["https://covers.example/hobbit-L.jpg"], "url": "",
-}
-HOBBIT_GB = {
-    "title": "The Hobbit", "subtitle": "Or There and Back Again", "authors": "J. R. R. Tolkien",
-    "publisher": "", "published": "2012-09-18", "pages": 320, "language": "en",
-    "description": "Bilbo Baggins is a hobbit.", "subjects": "Fiction",
-    "isbn10": None, "isbn13": "9780547928227", "cover_urls": [], "url": "",
-}
+"""Catalog API tests (as the owner). Run from the repo root: pytest"""
 
 
-@pytest.fixture()
-def client(tmp_path, monkeypatch):
-    os.environ["LIBRARY_DATA_DIR"] = str(tmp_path)
-    from app import db, lookup, main
-    importlib.reload(db)
-    importlib.reload(lookup)
-    importlib.reload(main)
-
-    async def fake_ol(_c, isbn):
-        return dict(HOBBIT_OL) if isbn == "9780547928227" else None
-
-    async def fake_gb(_c, q, limit=1):
-        return [dict(HOBBIT_GB)] if "9780547928227" in q or "054792822X" in q else []
-
-    async def fake_cover(urls, covers_dir):
-        if not urls:
-            return ""
-        (covers_dir / "fake.jpg").write_bytes(b"x" * 3000)
-        return "fake.jpg"
-
-    monkeypatch.setattr(lookup, "openlibrary_isbn", fake_ol)
-    monkeypatch.setattr(lookup, "google_query", fake_gb)
-    monkeypatch.setattr(lookup, "download_cover", fake_cover)
-
-    from fastapi.testclient import TestClient
-    with TestClient(main.app) as c:
-        yield c
-
-
-def test_isbn_normalize():
+def test_isbn_normalize(app):
     from app.lookup import normalize
     assert normalize("978-0-547-92822-7") == {"isbn13": "9780547928227", "isbn10": "054792822X", "kind": "isbn"}
     assert normalize("054792822X")["isbn13"] == "9780547928227"
@@ -122,7 +69,7 @@ def test_loans(client):
     assert len(active) == 1 and active[0]["overdue"] is True
     assert client.get("/api/books", params={"loaned": True}).json()["total"] == 1
     assert client.get("/api/stats").json()["overdue"] == 1
-    assert client.get("/api/borrowers").json() == ["Sam"]
+    assert client.get("/api/borrowers").json() == ["Sam", "Cameron"]  # past borrowers, then members
 
     client.post(f"/api/loans/{loan['id']}/return")
     assert client.get("/api/loans").json() == []

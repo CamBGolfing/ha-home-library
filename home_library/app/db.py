@@ -71,9 +71,67 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS users (
+    id             INTEGER PRIMARY KEY,
+    username       TEXT UNIQUE COLLATE NOCASE,    -- NULL for Home Assistant-only users
+    display_name   TEXT NOT NULL,
+    password_hash  TEXT,
+    role           TEXT NOT NULL DEFAULT 'viewer', -- owner | editor | viewer
+    ha_user_id     TEXT UNIQUE,
+    disabled       INTEGER NOT NULL DEFAULT 0,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash  TEXT PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS invites (
+    id           INTEGER PRIMARY KEY,
+    token_hash   TEXT NOT NULL UNIQUE,
+    role         TEXT NOT NULL DEFAULT 'viewer',
+    note         TEXT NOT NULL DEFAULT '',
+    for_user_id  INTEGER REFERENCES users(id) ON DELETE CASCADE,  -- set for password resets
+    created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at   TEXT NOT NULL,
+    used_at      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS borrow_requests (
+    id          INTEGER PRIMARY KEY,
+    book_id     INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message     TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'pending',   -- pending | approved | declined | cancelled
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    decided_at  TEXT,
+    decided_by  INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_requests_status ON borrow_requests(status);
 """
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
+
+# Columns added after the first release. Applied with ALTER TABLE when missing.
+ADDED_COLUMNS = {
+    "books": [("added_by", "INTEGER REFERENCES users(id) ON DELETE SET NULL")],
+    "loans": [("user_id", "INTEGER REFERENCES users(id) ON DELETE SET NULL")],
+}
+
+
+def _migrate(conn) -> None:
+    for table, cols in ADDED_COLUMNS.items():
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, ddl in cols:
+            if name not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)", (SCHEMA_VERSION,))
 
 
 def init_db() -> None:
@@ -81,10 +139,17 @@ def init_db() -> None:
     COVERS_DIR.mkdir(parents=True, exist_ok=True)
     with connect() as conn:
         conn.executescript(SCHEMA)
-        conn.execute(
-            "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)",
-            (SCHEMA_VERSION,),
-        )
+        _migrate(conn)
+        conn.execute("DELETE FROM sessions WHERE expires_at < datetime('now')")
+
+
+def get_setting(conn, key: str, default: str = "") -> str:
+    r = conn.execute("SELECT value FROM meta WHERE key = ?", (f"setting.{key}",)).fetchone()
+    return r[0] if r and r[0] is not None else default
+
+
+def set_setting(conn, key: str, value: str) -> None:
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (f"setting.{key}", value))
 
 
 def _connect() -> sqlite3.Connection:

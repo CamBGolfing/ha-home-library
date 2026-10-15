@@ -1,4 +1,10 @@
 configuration:
+  ha_user_role:
+    name: Access for Home Assistant users
+    description: >-
+      What people who open Library from the Home Assistant sidebar can do the first time they visit.
+      editor = add, edit and lend books; viewer = browse and ask to borrow. The first person in becomes
+      the owner. You can change anyone's access later on the library's Account page.
   google_books_api_key:
     name: Google Books API key
     description: Optional. Lookups work without one; a key raises Google's daily request limit.
@@ -6,4 +12,7 @@ configuration:
     name: Log level
     description: How much detail to write to the add-on log.
 network:
-  8099/tcp: Direct access to the library without going through Home Assistant. Leave blank unless you need it - this port has no login.
+  8099/tcp: >-
+    The library's own address, for friends who don't have a Home Assistant login. People sign in with
+    library accounts you invite them to. Leave blank unless you're sharing outside Home Assistant,
+    and put it behind HTTPS (for example a Cloudflare Tunnel) before sharing it beyond your home network.

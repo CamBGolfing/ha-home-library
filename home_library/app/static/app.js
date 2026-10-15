@@ -15,11 +15,23 @@ const store = {
   set(key, value) { try { localStorage.setItem("hl." + key, JSON.stringify(value)); } catch { /* storage unavailable */ } },
 };
 
+// The signed-in person: { user, via, setup_needed, is_addon }
+let ME = { user: null };
+const role = () => ME.user?.role || "";
+const isEditor = () => ["editor", "owner"].includes(role());
+const isOwner = () => role() === "owner";
+
 async function request(method, url, body) {
-  const opts = { method, headers: {} };
+  const opts = { method, headers: { "X-Library-Request": "1" }, credentials: "same-origin" };
   if (body instanceof FormData) opts.body = body;
   else if (body !== undefined) { opts.body = JSON.stringify(body); opts.headers["Content-Type"] = "application/json"; }
   const res = await fetch(url, opts);
+  if (res.status === 401 && !url.startsWith("api/auth/")) {
+    // Session ended (signed out elsewhere, account disabled). Back to sign-in.
+    ME = { user: null, setup_needed: false };
+    renderSignIn();
+    throw new Error("Sign in to continue");
+  }
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -33,6 +45,7 @@ const api = {
   get: (u) => request("GET", u),
   post: (u, b) => request("POST", u, b ?? {}),
   patch: (u, b) => request("PATCH", u, b),
+  put: (u, b) => request("PUT", u, b),
   del: (u) => request("DELETE", u),
 };
 
@@ -93,13 +106,18 @@ const shelfOptions = (selected, { none = "Not shelved" } = {}) =>
 const tagDatalist = () => `<datalist id="tagList">${cache.tags.map((t) => `<option value="${esc(t.name)}">`).join("")}</datalist>`;
 
 async function updateBadge() {
+  if (!ME.user) return;
   try {
     const s = await api.get("api/stats");
     const badge = $("#loanBadge");
-    badge.hidden = !s.loaned;
-    badge.textContent = s.loaned;
-    badge.classList.toggle("overdue", s.overdue > 0);
-    badge.title = s.overdue ? `${s.overdue} overdue` : `${s.loaned} on loan`;
+    // Editors: pending borrow requests come first, since they need an answer.
+    const asks = isEditor() ? s.requests : 0;
+    const n = asks || s.loaned;
+    badge.hidden = !n;
+    badge.textContent = n;
+    badge.classList.toggle("overdue", !asks && s.overdue > 0);
+    badge.classList.toggle("ask", asks > 0);
+    badge.title = asks ? `${plural(asks, "borrow request")} waiting` : s.overdue ? `${s.overdue} overdue` : `${s.loaned} on loan`;
   } catch { /* ignore */ }
 }
 
@@ -130,27 +148,36 @@ async function confirmDialog(title, message, label = "Delete") {
 let cleanup = null;
 let draft = null; // prefill for the new-book form
 
+// [pattern, handler, minimum role]
 const routes = [
-  [/^\/?$/, renderLibrary],
-  [/^\/book\/(\d+)$/, (m) => renderBookById(+m[1])],
-  [/^\/book\/(\d+)\/edit$/, (m) => renderEdit(+m[1])],
-  [/^\/new$/, () => renderEdit(null)],
-  [/^\/scan$/, renderScan],
-  [/^\/add$/, renderAdd],
-  [/^\/loans$/, renderLoans],
-  [/^\/organize$/, renderOrganize],
+  [/^\/?$/, renderLibrary, "viewer"],
+  [/^\/book\/(\d+)$/, (m) => renderBookById(+m[1]), "viewer"],
+  [/^\/book\/(\d+)\/edit$/, (m) => renderEdit(+m[1]), "editor"],
+  [/^\/new$/, () => renderEdit(null), "editor"],
+  [/^\/scan$/, renderScan, "editor"],
+  [/^\/add$/, renderAdd, "editor"],
+  [/^\/loans$/, renderLoans, "viewer"],
+  [/^\/organize$/, renderOrganize, "editor"],
+  [/^\/account$/, renderAccount, "viewer"],
 ];
+const RANK = { viewer: 0, editor: 1, owner: 2 };
 
 async function route() {
   if (cleanup) { try { await cleanup(); } catch { /* ignore */ } cleanup = null; }
   const path = location.hash.replace(/^#/, "") || "/";
   const [pathname, query = ""] = path.split("?");
   const params = Object.fromEntries(new URLSearchParams(query));
+  const invite = pathname.match(/^\/invite\/([\w-]+)$/);
+  if (invite) { await renderInvite(invite[1]); return; }
+  if (!ME.user) { renderSignIn(); return; }
+  document.body.classList.remove("signed-out");
+  updateBadge();
   const section = pathname.split("/")[1] || "library";
-  const navKey = { book: "library", new: "add", "": "library" }[section] ?? section;
+  const navKey = { book: "library", new: "library", add: "library", "": "library" }[section] ?? section;
   $$("[data-nav]").forEach((a) => { if (a.dataset.nav !== navKey) a.removeAttribute("aria-current"); else a.setAttribute("aria-current", "page"); });
-  for (const [re, fn] of routes) {
+  for (const [re, fn, minRole] of routes) {
     const m = pathname.match(re);
+    if (m && RANK[role()] < RANK[minRole]) { location.hash = "#/"; return; }
     if (m) {
       try { await fn(m, params); } catch (e) { view.innerHTML = `<div class="empty"><h2>Something went wrong</h2><p>${esc(e.message)}</p><a class="btn" href="#/">Back to the library</a></div>`; }
       view.focus({ preventScroll: true });
@@ -173,7 +200,7 @@ async function renderLibrary(_m, params) {
   view.innerHTML = `
     <div class="page-head">
       <div><h1>Library</h1><p class="stat-line" id="statLine">&nbsp;</p></div>
-      <div class="btn-row hide-mobile"><a class="btn btn-primary" href="#/scan">Scan books</a></div>
+      ${isEditor() ? `<div class="btn-row"><a class="btn btn-primary hide-mobile" href="#/scan">Scan books</a><a class="btn" href="#/add">Add by title</a></div>` : ""}
     </div>
     <label class="search">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
@@ -182,7 +209,7 @@ async function renderLibrary(_m, params) {
     <div class="filters">
       <button class="chip" data-status="owned">Owned</button>
       <button class="chip" data-status="wishlist">Wishlist</button>
-      <button class="chip" data-status="loaned">On loan</button>
+      <button class="chip" data-status="loaned">${isEditor() ? "On loan" : "Checked out"}</button>
       <button class="chip" data-status="">Everything</button>
       <select id="fShelf" aria-label="Shelf"><option value="">All shelves</option><option value="0">Not shelved</option>
         ${cache.shelves.map((s) => `<option value="${s.id}">${esc(shelfLabel(s))}</option>`).join("")}</select>
@@ -214,7 +241,9 @@ async function renderLibrary(_m, params) {
       const filtered = f.q || f.shelf !== "" || f.tag || f.status !== "owned";
       results.innerHTML = filtered
         ? `<div class="empty"><h2>No matches</h2><p>Nothing here fits those filters. Try a different search or clear the filters.</p><button class="btn" id="clearF">Clear filters</button></div>`
-        : `<div class="empty"><h2>Your shelves are empty</h2><p>Scan the barcode on the back of a book and it'll show up here with its cover.</p><div class="btn-row"><a class="btn btn-primary" href="#/scan">Scan your first book</a><a class="btn" href="#/add">Add without a barcode</a></div></div>`;
+        : isEditor()
+          ? `<div class="empty"><h2>Your shelves are empty</h2><p>Scan the barcode on the back of a book and it'll show up here with its cover.</p><div class="btn-row"><a class="btn btn-primary" href="#/scan">Scan your first book</a><a class="btn" href="#/add">Add without a barcode</a></div></div>`
+          : `<div class="empty"><h2>No books yet</h2><p>Nothing has been cataloged so far. Check back soon.</p></div>`;
       $("#clearF")?.addEventListener("click", () => { Object.assign(f, { q: "", status: "owned", shelf: "", tag: "" }); $("#q").value = ""; $("#fShelf").value = ""; $("#fTag").value = ""; syncChips(); load(); });
       return;
     }
@@ -227,7 +256,8 @@ async function renderLibrary(_m, params) {
     const bits = [`<strong>${s.books}</strong> ${s.books === 1 ? "book" : "books"}`];
     if (s.shelves) bits.push(`on ${plural(s.shelves, "shelf").replace("shelfs", "shelves")}`);
     let line = bits.join(" ");
-    if (s.loaned) line += `, ${s.loaned} on loan`;
+    if (isEditor() && s.loaned) line += `, ${s.loaned} on loan`;
+    if (!isEditor() && s.loaned) line += `, ${s.loaned} checked out to you`;
     if (s.wishlist) line += `, ${s.wishlist} on the wishlist`;
     $("#statLine").innerHTML = line;
   };
@@ -243,9 +273,13 @@ async function renderLibrary(_m, params) {
 
 function cardHTML(b) {
   let flag = "";
-  if (b.active_loan) {
-    const overdue = b.active_loan.due_at && b.active_loan.due_at < today();
-    flag = `<span class="flag ${overdue ? "overdue" : ""}">${overdue ? "Overdue" : "With"} ${esc(b.active_loan.borrower)}</span>`;
+  const loan = b.active_loan;
+  if (loan && !isEditor()) {
+    const overdue = loan.mine && loan.due_at && loan.due_at < today();
+    flag = `<span class="flag ${overdue ? "overdue" : ""}">${loan.mine ? (overdue ? "Overdue, you have it" : "You have it") : "Checked out"}</span>`;
+  } else if (loan) {
+    const overdue = loan.due_at && loan.due_at < today();
+    flag = `<span class="flag ${overdue ? "overdue" : ""}">${overdue ? "Overdue" : "With"} ${esc(loan.borrower)}</span>`;
   } else if (b.status === "wishlist") flag = `<span class="flag">Wishlist</span>`;
   return `<a class="card" href="#/book/${b.id}">${coverHTML(b)}
     <span class="card-title">${esc(b.title)}</span>
@@ -258,6 +292,7 @@ async function renderBookById(id) {
   loading();
   await refreshMeta();
   const b = await api.get(`api/books/${id}`);
+  if (!isEditor()) { renderBookForViewer(b); return; }
   const loan = b.active_loan;
   const overdue = loan?.due_at && loan.due_at < today();
   const facts = [
@@ -265,7 +300,7 @@ async function renderBookById(id) {
     ["Pages", b.pages], ["Format", b.format], ["Language", b.language],
     ["ISBN", [b.isbn13, b.isbn10].filter(Boolean).join(" / ")],
     ["Subjects", b.subjects], ["Copies", b.copies > 1 ? b.copies : ""],
-    ["Added", fmtDate(b.created_at)], ["Data from", b.source],
+    ["Added", [fmtDate(b.created_at), b.added_by_name && `by ${b.added_by_name}`].filter(Boolean).join(" ")], ["Data from", b.source],
   ].filter(([, v]) => v);
 
   view.innerHTML = `
@@ -295,6 +330,12 @@ async function renderBookById(id) {
             : `<div><strong>On the shelf</strong><p class="small muted">Lend it out to keep track of who has it.</p></div>
                <button class="btn btn-sm" id="lend">Lend</button>`}
         </div>` : ""}
+        ${(b.requests || []).map((r) => `
+        <div class="loan-box ask">
+          <div><strong>${esc(r.display_name)} asked to borrow this</strong>
+            <p class="small muted">${fmtDate(r.created_at)}${r.message ? `: "${esc(r.message)}"` : ""}</p></div>
+          <div class="btn-row">${loan ? "" : `<button class="btn btn-primary btn-sm" data-approve="${r.id}">Lend it</button>`}<button class="btn btn-sm" data-decline="${r.id}">Decline</button></div>
+        </div>`).join("")}
 
         <div class="form-grid">
           <label class="field"><span>Shelf</span><select id="shelfSel">${shelfOptions(b.shelf_id)}</select></label>
@@ -365,6 +406,7 @@ async function renderBookById(id) {
   $("#returnLoan")?.addEventListener("click", async () => {
     try { await api.post(`api/loans/${loan.id}/return`); toast("Marked returned"); updateBadge(); reload(); } catch (err) { fail(err); }
   });
+  wireRequestButtons(reload);
 
   $("#coverFile").addEventListener("change", async (e) => {
     const file = e.target.files[0];
@@ -382,6 +424,78 @@ async function renderBookById(id) {
     if (!(await confirmDialog("Delete this book?", `"${b.title}" and its loan history will be removed from the library.`))) return;
     try { await api.del(`api/books/${id}`); toast("Book deleted"); location.hash = "#/"; } catch (err) { fail(err); }
   });
+}
+
+function bookFacts(b) {
+  return [
+    ["Published", [b.publisher, b.published].filter(Boolean).join(", ")],
+    ["Pages", b.pages], ["Format", b.format], ["Language", b.language],
+    ["ISBN", [b.isbn13, b.isbn10].filter(Boolean).join(" / ")], ["Subjects", b.subjects],
+    ["Shelf", b.shelf ? shelfLabel(b.shelf) : ""],
+  ].filter(([, v]) => v);
+}
+
+function renderBookForViewer(b) {
+  const loan = b.active_loan;
+  const overdue = loan?.mine && loan.due_at && loan.due_at < today();
+  const req = b.my_request;
+  let status;
+  if (b.status !== "owned") {
+    status = `<p class="notice">On the wishlist. It isn't in the library yet.</p>`;
+  } else if (loan?.mine) {
+    status = `<div class="loan-box ${overdue ? "overdue" : ""}"><div><strong>${overdue ? "Overdue: you have this one" : "You have this one"}</strong>
+      <p class="small muted">${loan.due_at ? `Due back ${fmtDate(loan.due_at)}` : "No due date"}</p></div></div>`;
+  } else if (req) {
+    status = `<div class="loan-box ask"><div><strong>You asked to borrow this</strong>
+      <p class="small muted">Sent ${fmtDate(req.created_at)}. You'll see it under My books once it's lent to you.</p></div>
+      <button class="btn btn-sm" id="cancelReq">Cancel request</button></div>`;
+  } else {
+    status = `<div class="loan-box"><div><strong>${loan ? "Checked out right now" : "On the shelf"}</strong>
+      <p class="small muted">${loan ? "Ask anyway and you'll be next in line." : "Ask to borrow it and the owner will get your request."}</p></div>
+      <button class="btn btn-primary btn-sm" id="askBorrow">Ask to borrow</button></div>`;
+  }
+  view.innerHTML = `
+    <p style="margin-bottom:16px"><a href="#/" class="btn btn-quiet btn-sm" style="padding-left:0">&larr; Library</a></p>
+    <div class="detail">
+      <div><div class="detail-cover">${coverHTML(b)}</div></div>
+      <div class="stack">
+        <div class="detail-title">
+          ${b.series ? `<p class="series-line">${esc(b.series)}${b.series_index != null ? `, book ${esc(+b.series_index)}` : ""}</p>` : ""}
+          <h1>${esc(b.title)}</h1>
+          ${b.subtitle ? `<p class="sub">${esc(b.subtitle)}</p>` : ""}
+          ${b.authors ? `<p class="by">by ${esc(b.authors)}</p>` : ""}
+        </div>
+        ${status}
+        ${b.tags.length ? `<div class="tag-editor">${b.tags.map((t) => `<a class="tag" style="--tag:${esc(t.color)};text-decoration:none" href="#/?tag=${t.id}">${esc(t.name)}</a>`).join("")}</div>` : ""}
+        ${b.description ? `<div><p class="description clamped" id="desc">${esc(b.description)}</p><button class="btn btn-quiet btn-sm" id="more" style="padding-left:0">Read more</button></div>` : ""}
+        <dl class="facts">${bookFacts(b).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+      </div>
+    </div>`;
+  $("#more")?.addEventListener("click", (e) => { $("#desc").classList.remove("clamped"); e.target.remove(); });
+  $("#askBorrow")?.addEventListener("click", async () => {
+    const fd = await modalForm(`Borrow "${b.title}"`, `
+      <p class="muted">The library owner will see your request and let you know.</p>
+      <label class="field"><span>Message (optional)</span><input name="message" placeholder="e.g. I can pick it up Sunday" maxlength="500"></label>`, "Send request");
+    if (!fd) return;
+    try { await api.post(`api/books/${b.id}/requests`, { message: fd.get("message") || "" }); toast("Request sent"); updateBadge(); renderBookById(b.id); }
+    catch (err) { fail(err); }
+  });
+  $("#cancelReq")?.addEventListener("click", async () => {
+    try { await api.post(`api/requests/${req.id}/cancel`); toast("Request cancelled"); updateBadge(); renderBookById(b.id); } catch (err) { fail(err); }
+  });
+}
+
+function wireRequestButtons(after) {
+  $$("[data-approve]").forEach((btn) => btn.addEventListener("click", async () => {
+    const fd = await modalForm("Lend this book", `
+      <label class="field"><span>Due back (optional)</span><input type="date" name="due_at" value="${plusDays(30)}"></label>`, "Lend book");
+    if (!fd) return;
+    try { const loan = await api.post(`api/requests/${btn.dataset.approve}/approve`, { due_at: fd.get("due_at") || null }); toast(`Lent to ${loan.borrower}`); updateBadge(); after(); }
+    catch (err) { fail(err); }
+  }));
+  $$("[data-decline]").forEach((btn) => btn.addEventListener("click", async () => {
+    try { await api.post(`api/requests/${btn.dataset.decline}/decline`); toast("Request declined"); updateBadge(); after(); } catch (err) { fail(err); }
+  }));
 }
 
 // Phone photos are huge; scale covers down before upload.
@@ -781,11 +895,20 @@ async function renderScan() {
 
 async function renderLoans(_m, params) {
   loading();
+  if (!isEditor()) { await renderMyBooks(); return; }
   const history = params.history === "1";
-  const loans = await api.get(`api/loans?active=${!history}`);
+  const [loans, requests] = await Promise.all([api.get(`api/loans?active=${!history}`), history ? [] : api.get("api/requests")]);
+  const overdueCount = loans.filter((l) => l.overdue).length;
   view.innerHTML = `
-    <div class="page-head"><div><h1>Loans</h1><p class="muted">${history ? "Every book lent out, newest first." : loans.length ? `${plural(loans.length, "book")} out right now${loans.some((l) => l.overdue) ? `, ${loans.filter((l) => l.overdue).length} overdue` : ""}.` : ""}</p></div>
+    <div class="page-head"><div><h1>Loans</h1><p class="muted">${history ? "Every book lent out, newest first." : loans.length ? `${plural(loans.length, "book")} out right now${overdueCount ? `, ${overdueCount} overdue` : ""}.` : ""}</p></div>
       <a class="btn btn-sm" href="${history ? "#/loans" : "#/loans?history=1"}">${history ? "Show books out now" : "Show history"}</a></div>
+    ${requests.length ? `<div class="panel" style="margin-bottom:16px"><h2>Asked to borrow</h2><div class="list">${requests.map((r) => `
+      <div class="row stack-mobile">
+        <div class="thumb">${coverHTML(r)}</div>
+        <div class="grow"><a href="#/book/${r.book_id}">${esc(r.title)}</a>
+          <p><strong style="color:var(--ink)">${esc(r.display_name)}</strong>, ${fmtDate(r.created_at)}${r.message ? `: "${esc(r.message)}"` : ""}${r.book_out ? ". Checked out right now." : ""}</p></div>
+        <div class="btn-row">${r.book_out ? "" : `<button class="btn btn-primary btn-sm" data-approve="${r.id}">Lend it</button>`}<button class="btn btn-sm btn-quiet" data-decline="${r.id}">Decline</button></div>
+      </div>`).join("")}</div></div>` : ""}
     ${loans.length ? `<div class="panel"><div class="list">${loans.map((l) => `
       <div class="row ${l.overdue ? "overdue" : ""}">
         <div class="thumb">${coverHTML(l)}</div>
@@ -796,6 +919,32 @@ async function renderLoans(_m, params) {
     : `<div class="empty"><h2>${history ? "Nothing lent yet" : "Every book is home"}</h2><p>To lend a book, open it from the library and choose Lend.</p></div>`}`;
   $$("[data-return]").forEach((b) => b.addEventListener("click", async () => {
     try { await api.post(`api/loans/${b.dataset.return}/return`); toast("Marked returned"); updateBadge(); renderLoans(null, params); } catch (e) { fail(e); }
+  }));
+  wireRequestButtons(() => renderLoans(null, params));
+}
+
+async function renderMyBooks() {
+  const [loans, requests] = await Promise.all([api.get("api/loans"), api.get("api/requests")]);
+  const pending = requests.filter((r) => r.status === "pending");
+  const recent = requests.filter((r) => r.status === "declined");
+  view.innerHTML = `
+    <div class="page-head"><div><h1>My books</h1><p class="muted">Books you've borrowed and books you've asked for.</p></div></div>
+    <div class="stack">
+      <div class="panel"><h2>Borrowed</h2>
+        ${loans.length ? `<div class="list">${loans.map((l) => `
+          <div class="row ${l.overdue ? "overdue" : ""}"><div class="thumb">${coverHTML(l)}</div>
+            <div class="grow"><a href="#/book/${l.book_id}">${esc(l.title)}</a>
+              <p>Since ${fmtDate(l.loaned_at)}${l.due_at ? `. <span class="due">${l.overdue ? "Was due" : "Due back"} ${fmtDate(l.due_at)}</span>` : ""}</p></div></div>`).join("")}</div>`
+          : `<p class="muted">You don't have any books right now. Find one in the library and choose Ask to borrow.</p>`}
+      </div>
+      ${pending.length || recent.length ? `<div class="panel"><h2>Requests</h2><div class="list">${[...pending, ...recent].map((r) => `
+        <div class="row"><div class="thumb">${coverHTML(r)}</div>
+          <div class="grow"><a href="#/book/${r.book_id}">${esc(r.title)}</a>
+            <p>${r.status === "pending" ? `Asked ${fmtDate(r.created_at)}, waiting for an answer` : "Not this time"}</p></div>
+          ${r.status === "pending" ? `<button class="btn btn-sm btn-quiet" data-cancel="${r.id}">Cancel</button>` : ""}</div>`).join("")}</div></div>` : ""}
+    </div>`;
+  $$("[data-cancel]").forEach((b) => b.addEventListener("click", async () => {
+    try { await api.post(`api/requests/${b.dataset.cancel}/cancel`); toast("Request cancelled"); updateBadge(); renderMyBooks(); } catch (e) { fail(e); }
   }));
 }
 
@@ -885,7 +1034,276 @@ async function renderOrganize() {
   }));
 }
 
+// ------------------------------------------------------------------ sign in
+
+const ROLE_INFO = {
+  owner: ["Owner", "Everything, including inviting people"],
+  editor: ["Family", "Add, edit and lend books"],
+  viewer: ["Friend", "Browse and ask to borrow"],
+};
+
+function authShell(inner) {
+  document.body.classList.add("signed-out");
+  view.innerHTML = `<div class="auth-wrap"><div class="auth-card">
+    <div class="auth-brand"><img src="static/icon.svg" alt="" width="40" height="40"><span>Home Library</span></div>
+    ${inner}</div></div>`;
+}
+
+async function signedIn() {
+  ME = await api.get("api/auth/me");
+  applyRole();
+  document.body.classList.remove("signed-out");
+  if (/^#\/invite\//.test(location.hash)) location.hash = "#/";
+  else route();
+}
+
+function renderSignIn() {
+  if (cleanup) { Promise.resolve(cleanup()).catch(() => {}); cleanup = null; }
+  if (ME.setup_needed) {
+    authShell(`
+      <h1>Set up your library</h1>
+      <p class="muted">Create the owner account. You'll invite family and friends from the Account page afterwards.</p>
+      <form id="authForm" class="stack" style="margin-top:18px">
+        <label class="field"><span>Your name</span><input name="display_name" required autocomplete="name"></label>
+        <label class="field"><span>Username</span><input name="username" required autocomplete="username" autocapitalize="none" minlength="2"></label>
+        <label class="field"><span>Password</span><input type="password" name="password" required minlength="8" autocomplete="new-password"></label>
+        <button class="btn btn-primary">Create library</button>
+      </form>`);
+    $("#authForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try { await api.post("api/auth/setup", Object.fromEntries(fd)); await signedIn(); } catch (err) { fail(err); }
+    });
+    return;
+  }
+  authShell(`
+    <h1>Sign in</h1>
+    <form id="authForm" class="stack" style="margin-top:18px">
+      <label class="field"><span>Username</span><input name="username" required autocomplete="username" autocapitalize="none"></label>
+      <label class="field"><span>Password</span><input type="password" name="password" required autocomplete="current-password"></label>
+      <button class="btn btn-primary">Sign in</button>
+    </form>
+    <p class="muted small" style="margin-top:16px">New here? Ask the library owner for an invite link. Forgot your password? They can send you a reset link.</p>`);
+  $("#authForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const btn = $("button", e.target); btn.disabled = true;
+    try { await api.post("api/auth/login", Object.fromEntries(fd)); await signedIn(); }
+    catch (err) { fail(err); btn.disabled = false; }
+  });
+}
+
+async function renderInvite(token) {
+  let info;
+  try { info = await api.get(`api/auth/invite/${token}`); }
+  catch (err) {
+    authShell(`<h1>Link expired</h1><p class="muted" style="margin:8px 0 18px">${esc(err.message)}</p><a class="btn" href="#/">Go to sign in</a>`);
+    return;
+  }
+  const [roleName, roleDesc] = ROLE_INFO[info.role] || ROLE_INFO.viewer;
+  const signedInNote = ME.user ? `<p class="notice" style="margin-top:12px">You're signed in as ${esc(ME.user.display_name)}. Continuing switches to the ${info.reset ? "account below" : "new account"}.</p>` : "";
+  authShell(info.reset ? `
+      <h1>Choose a new password</h1>
+      <p class="muted">For ${esc(info.user.display_name)}${info.user.username ? ` (${esc(info.user.username)})` : ""}.</p>${signedInNote}
+      <form id="authForm" class="stack" style="margin-top:18px">
+        <input type="hidden" name="display_name" value="${esc(info.user.display_name)}">
+        <label class="field"><span>Username</span><input name="username" value="${esc(info.user.username || "")}" ${info.user.username ? "readonly" : "required"} autocomplete="username" autocapitalize="none" minlength="2"></label>
+        <label class="field"><span>New password</span><input type="password" name="password" required minlength="8" autocomplete="new-password"></label>
+        <button class="btn btn-primary">Save and sign in</button>
+      </form>` : `
+      <h1>You're invited</h1>
+      <p class="muted">${info.library_owner ? `${esc(info.library_owner)} invited you to their book library.` : "You've been invited to a book library."} You'll be able to ${esc(roleDesc.toLowerCase())}.</p>${signedInNote}
+      <form id="authForm" class="stack" style="margin-top:18px">
+        <label class="field"><span>Your name</span><input name="display_name" required autocomplete="name" placeholder="How the owner will see you"></label>
+        <label class="field"><span>Username</span><input name="username" required autocomplete="username" autocapitalize="none" minlength="2"></label>
+        <label class="field"><span>Password</span><input type="password" name="password" required minlength="8" autocomplete="new-password"><small class="muted">At least 8 characters.</small></label>
+        <button class="btn btn-primary">Join as ${esc(roleName.toLowerCase())}</button>
+      </form>`);
+  $("#authForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const btn = $("button", e.target); btn.disabled = true;
+    try { await api.post(`api/auth/invite/${token}`, Object.fromEntries(fd)); toast(info.reset ? "Password saved" : "Welcome to the library"); await signedIn(); }
+    catch (err) { fail(err); btn.disabled = false; }
+  });
+}
+
+// ------------------------------------------------------------------ account & people
+
+function copyText(text, input) {
+  const done = () => toast("Link copied");
+  if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(done, () => { input?.select(); document.execCommand("copy"); done(); });
+  else { input?.select(); document.execCommand("copy"); done(); }
+}
+
+function showLink(title, link, explain) {
+  const dlg = $("#modal");
+  dlg.innerHTML = `<form method="dialog"><h2>${esc(title)}</h2><p class="muted">${esc(explain)}</p>
+    <input id="linkOut" readonly value="${esc(link)}" aria-label="Link">
+    <div class="btn-row">${navigator.share ? `<button type="button" class="btn" id="shareLink">Share</button>` : ""}
+      <button type="button" class="btn btn-primary" id="copyLink">Copy link</button><button class="btn btn-quiet" value="cancel">Done</button></div></form>`;
+  dlg.showModal();
+  $("#linkOut").select();
+  $("#copyLink").addEventListener("click", () => copyText(link, $("#linkOut")));
+  $("#shareLink")?.addEventListener("click", () => navigator.share({ title: "Home Library", text: title, url: link }).catch(() => {}));
+}
+
+async function renderAccount() {
+  loading();
+  const u = ME.user;
+  const owner = isOwner();
+  const [users, invites, settings] = owner
+    ? await Promise.all([api.get("api/users"), api.get("api/invites"), api.get("api/settings")])
+    : [[], [], null];
+  const [roleName, roleDesc] = ROLE_INFO[u.role];
+  const viaHA = ME.via === "homeassistant";
+
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Account</h1></div></div>
+    <div class="org-grid">
+      <div class="stack">
+        <div class="panel">
+          <h2>${esc(u.display_name)}</h2>
+          <p class="muted">${esc(roleName)}: ${esc(roleDesc.toLowerCase())}.</p>
+          <p class="small muted" style="margin-top:6px">${viaHA ? "Signed in through Home Assistant." : `Signed in as ${esc(u.username)}.`}</p>
+          ${viaHA ? "" : `<div class="btn-row" style="margin-top:14px"><button class="btn" id="signOut">Sign out</button></div>`}
+        </div>
+        <form class="panel" id="pwForm">
+          <h2>${u.has_password ? "Change password" : "Sign in outside Home Assistant"}</h2>
+          ${u.has_password ? "" : `<p class="muted" style="margin-bottom:12px">Add a username and password so you can use the library's own address, for example on a phone that isn't signed in to Home Assistant.</p>`}
+          <div class="stack">
+            ${u.has_password
+              ? `<label class="field"><span>Current password</span><input type="password" name="current" required autocomplete="current-password"></label>`
+              : `<label class="field"><span>Username</span><input name="username" required minlength="2" autocapitalize="none" autocomplete="username"></label>`}
+            <label class="field"><span>New password</span><input type="password" name="new" required minlength="8" autocomplete="new-password"></label>
+            <div><button class="btn btn-primary">${u.has_password ? "Change password" : "Save sign-in"}</button></div>
+          </div>
+        </form>
+        ${owner ? `
+        <form class="panel" id="urlForm">
+          <h2>Library address for friends</h2>
+          <p class="muted" style="margin-bottom:12px">The web address friends use to reach the library, outside Home Assistant. Invite links are built from it. See the README for setting one up with a Cloudflare Tunnel or Tailscale.</p>
+          <div class="inline-form nowrap" style="margin-top:0"><input name="public_url" value="${esc(settings.public_url)}" placeholder="https://library.example.com" inputmode="url" aria-label="Library address"><button class="btn">Save</button></div>
+        </form>` : ""}
+      </div>
+      ${owner ? `
+      <div class="stack">
+        <div class="panel">
+          <h2>People</h2>
+          <div class="list">${users.map((p) => `
+            <div class="row">
+              <div class="grow"><p style="color:var(--ink);font-weight:600">${esc(p.display_name)}${p.id === u.id ? " (you)" : ""}${p.disabled ? ` <span class="flag overdue">Turned off</span>` : ""}</p>
+                <p>${[p.ha_linked && "Home Assistant", p.username && `@${p.username}`].filter(Boolean).map(esc).join(", ")}${p.last_seen ? `. Last seen ${fmtDate(p.last_seen)}` : ". Hasn't signed in yet"}</p></div>
+              <select data-role="${p.id}" aria-label="Role for ${esc(p.display_name)}" style="width:auto">${Object.entries(ROLE_INFO).map(([k, [n]]) => `<option value="${k}" ${p.role === k ? "selected" : ""}>${n}</option>`).join("")}</select>
+              ${p.id === u.id ? "" : `<button class="btn btn-sm btn-quiet" data-person="${p.id}" aria-label="More for ${esc(p.display_name)}">More</button>`}
+            </div>`).join("")}</div>
+        </div>
+        <div class="panel">
+          <h2>Invite someone</h2>
+          <p class="muted" style="margin-bottom:12px">Make a link and send it to them. It works once and expires in 7 days.</p>
+          <form id="inviteForm" class="stack">
+            <div class="form-grid">
+              <label class="field"><span>Who's it for? (optional)</span><input name="note" placeholder="e.g. Jess from small group"></label>
+              <label class="field"><span>They can</span><select name="role">
+                <option value="viewer">Browse and ask to borrow</option>
+                <option value="editor">Add, edit and lend books</option>
+                <option value="owner">Everything, including inviting</option></select></label>
+            </div>
+            <div><button class="btn btn-primary">Make invite link</button></div>
+          </form>
+          ${invites.filter((i) => !i.for_user_id).length ? `<h3 style="margin:18px 0 4px">Waiting to be used</h3><div class="list">${invites.filter((i) => !i.for_user_id).map((i) => `
+            <div class="row"><div class="grow"><p style="color:var(--ink)">${esc(i.note || "Invite")}</p><p>${esc(ROLE_INFO[i.role][0])}, expires ${fmtDate(i.expires_at)}</p></div>
+              <button class="btn btn-sm btn-quiet" data-revoke="${i.id}">Cancel</button></div>`).join("")}</div>` : ""}
+        </div>
+        ${viaHA ? `<p class="small muted">Family members with their own Home Assistant login can open Library from the sidebar and are added here automatically.</p>` : ""}
+      </div>` : ""}
+    </div>`;
+
+  $("#signOut")?.addEventListener("click", async () => {
+    await api.post("api/auth/logout");
+    ME = await api.get("api/auth/me");
+    location.hash = "#/";
+    renderSignIn();
+  });
+  $("#pwForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try { await api.post("api/auth/password", Object.fromEntries(fd)); toast(u.has_password ? "Password changed" : "Sign-in saved"); ME = await api.get("api/auth/me"); renderAccount(); }
+    catch (err) { fail(err); }
+  });
+  if (!owner) return;
+
+  $("#urlForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try { await api.put("api/settings", { public_url: new FormData(e.target).get("public_url") }); toast("Address saved"); } catch (err) { fail(err); }
+  });
+  $("#inviteForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      const inv = await api.post("api/invites", Object.fromEntries(fd));
+      if (!inv.url) {
+        toast("Save the library address for friends first, so the link points somewhere they can reach", { error: true, ms: 7000 });
+        await api.del(`api/invites/${inv.id}`);
+        $("#urlForm input").focus();
+        return;
+      }
+      showLink("Invite link ready", inv.url, "Send this to them by text or email. Anyone with the link can use it once, so send it only to the person you mean.");
+      $("#modal").addEventListener("close", () => renderAccount(), { once: true });
+    } catch (err) { fail(err); }
+  });
+  $$("[data-revoke]").forEach((b) => b.addEventListener("click", async () => {
+    try { await api.del(`api/invites/${b.dataset.revoke}`); toast("Invite cancelled"); renderAccount(); } catch (err) { fail(err); }
+  }));
+  $$("[data-role]").forEach((sel) => sel.addEventListener("change", async () => {
+    try {
+      await api.patch(`api/users/${sel.dataset.role}`, { role: sel.value });
+      toast("Access updated");
+      if (+sel.dataset.role === u.id) { ME = await api.get("api/auth/me"); applyRole(); location.hash = "#/"; }
+    } catch (err) { fail(err); renderAccount(); }
+  }));
+  $$("[data-person]").forEach((b) => b.addEventListener("click", async () => {
+    const p = users.find((x) => x.id === +b.dataset.person);
+    const fd = await modalForm(p.display_name, `
+      <label class="field"><span>Name</span><input name="display_name" value="${esc(p.display_name)}"></label>
+      <fieldset class="stack" style="border:0;padding:0;margin:0">
+        <label style="display:flex;gap:8px;align-items:center"><input type="radio" name="action" value="save" checked> Just save the name</label>
+        ${p.ha_linked && !p.username ? "" : `<label style="display:flex;gap:8px;align-items:center"><input type="radio" name="action" value="reset"> Make a password reset link</label>`}
+        <label style="display:flex;gap:8px;align-items:center"><input type="radio" name="action" value="toggle"> ${p.disabled ? "Turn access back on" : "Turn off access (keeps their loan history)"}</label>
+        <label style="display:flex;gap:8px;align-items:center"><input type="radio" name="action" value="remove"> Remove them completely</label>
+      </fieldset>`, "Continue");
+    if (!fd) return;
+    try {
+      const action = fd.get("action");
+      if (action === "save") { await api.patch(`api/users/${p.id}`, { display_name: fd.get("display_name") }); toast("Saved"); }
+      if (action === "toggle") { await api.patch(`api/users/${p.id}`, { disabled: !p.disabled }); toast(p.disabled ? "Access turned on" : "Access turned off"); }
+      if (action === "remove") {
+        if (!(await confirmDialog(`Remove ${p.display_name}?`, "They won't be able to sign in. Books they borrowed stay in your loan history.", "Remove"))) return;
+        await api.del(`api/users/${p.id}`); toast("Removed");
+      }
+      if (action === "reset") {
+        const inv = await api.post(`api/users/${p.id}/reset`);
+        if (!inv.url) { toast("Save the library address for friends first", { error: true }); await api.del(`api/invites/${inv.id}`); return; }
+        showLink("Password reset link", inv.url, `Send this to ${p.display_name}. It lets them choose a new password and works once.`);
+      }
+      renderAccount();
+    } catch (err) { fail(err); }
+  }));
+}
+
 // ------------------------------------------------------------------ boot
 
-route();
-updateBadge();
+function applyRole() {
+  const r = role();
+  $$("[data-min-role]").forEach((el) => { el.hidden = !r || RANK[r] < RANK[el.dataset.minRole]; });
+  const loansLabel = $('[data-nav="loans"] span');
+  if (loansLabel) loansLabel.textContent = isEditor() ? "Loans" : "My books";
+}
+
+async function boot() {
+  try { ME = await api.get("api/auth/me"); }
+  catch (err) { ME = { user: null }; }
+  applyRole();
+  route();
+}
+boot();

@@ -1,5 +1,5 @@
 name: Home Library
-version: "1.0.0"
+version: "1.1.0"
 slug: home_library
 description: Catalog the books in your house. Scan barcodes, pull covers, track loans.
 url: https://github.com/CamBGolfing/ha-home-library
@@ -15,14 +15,17 @@ ingress_port: 8099
 ingress_stream: false
 panel_icon: mdi:bookshelf
 panel_title: Library
+panel_admin: false
 ports:
   8099/tcp: null
 ports_description:
-  8099/tcp: Direct access (optional, no login - leave blank to keep it behind Home Assistant)
+  8099/tcp: Library address for friends (signs in with library accounts). Leave blank unless you are sharing outside Home Assistant.
 backup: hot
 options:
+  ha_user_role: editor
   google_books_api_key: ""
   log_level: info
 schema:
+  ha_user_role: list(viewer|editor|owner)
   google_books_api_key: str?
   log_level: list(debug|info|warning|error)
