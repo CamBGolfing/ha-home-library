@@ -20,6 +20,20 @@ let ME = { user: null };
 // Library name and logo, set by the owner on the Account page.
 let BRAND = { name: document.getElementById("brandName")?.textContent || "Home Library", logo_url: "branding/logo-512.png", icon_url: "branding/logo-192.png" };
 
+// ---- appearance: light, dark, or "auto" to follow the device
+const THEME_LABELS = { light: "Light", dark: "Dark", auto: "Match my device" };
+const effectiveTheme = () => ME.user?.theme || BRAND.default_theme || "light";
+
+function applyTheme(t = effectiveTheme()) {
+  if (!THEME_LABELS[t]) t = "light";
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem("hl.theme", t); } catch { /* storage unavailable */ }
+  // Match the phone's status bar to the page background.
+  const paper = getComputedStyle(document.documentElement).getPropertyValue("--paper").trim();
+  const meta = $("#themeColor"); if (meta && paper) meta.content = paper;
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => applyTheme());
+
 function applyBrand(b) {
   BRAND = b;
   document.title = b.name;
@@ -1131,6 +1145,7 @@ function authShell(inner) {
 async function signedIn() {
   ME = await api.get("api/auth/me");
   applyRole();
+  applyTheme();
   document.body.classList.remove("signed-out");
   if (/^#\/invite\//.test(location.hash)) location.hash = "#/";
   else route();
@@ -1295,7 +1310,7 @@ function wireBrandForm() {
     const btn = $("button.btn-primary", form); btn.disabled = true;
     try {
       const fd = new FormData(form);
-      let b = await api.put("api/branding", { name: fd.get("name").trim(), short_name: (fd.get("short_name") || "").trim() });
+      let b = await api.put("api/branding", { name: fd.get("name").trim(), short_name: (fd.get("short_name") || "").trim(), default_theme: fd.get("default_theme") });
       if (picked) {
         const up = new FormData();
         const bg = fit === "contain" ? $("#logoBg").value : null;
@@ -1304,6 +1319,7 @@ function wireBrandForm() {
         b = await request("POST", "api/branding/logo", up);
       }
       applyBrand(b);
+      applyTheme();
       toast("Saved. Phones that already added the library to their home screen may need to re-add it to see a new icon.", { ms: 6000 });
       renderAccount();
     } catch (err) { fail(err); btn.disabled = false; }
@@ -1330,6 +1346,13 @@ async function renderAccount() {
           <p class="small muted" style="margin-top:6px">${viaHA ? "Signed in through Home Assistant." : `Signed in as ${esc(u.username)}.`}</p>
           ${viaHA ? "" : `<div class="btn-row" style="margin-top:14px"><button class="btn" id="signOut">Sign out</button></div>`}
         </div>
+        <div class="panel">
+          <h2>Appearance</h2>
+          <div class="theme-choice" role="radiogroup" aria-label="Appearance" style="margin-top:4px">
+            ${[["", `Library default (${THEME_LABELS[BRAND.default_theme || "light"]})`], ["light", "Light"], ["dark", "Dark"], ["auto", "Match my device"]].map(([v, label]) => `
+              <label><input type="radio" name="myTheme" value="${v}" ${(u.theme || "") === v ? "checked" : ""}> ${esc(label)}</label>`).join("")}
+          </div>
+        </div>
         <form class="panel" id="pwForm">
           <h2>${u.has_password ? "Change password" : "Sign in outside Home Assistant"}</h2>
           ${u.has_password ? "" : `<p class="muted" style="margin-bottom:12px">Add a username and password so you can use the library's own address, for example on a phone that isn't signed in to Home Assistant.</p>`}
@@ -1343,7 +1366,7 @@ async function renderAccount() {
         </form>
         ${owner ? `
         <form class="panel" id="brandForm">
-          <h2>Library name and logo</h2>
+          <h2>Library name, logo and look</h2>
           <p class="muted" style="margin-bottom:14px">Shown in the browser tab, on the sign-in and invite pages, and on phone home screens.</p>
           <div class="brand-preview">
             <div class="app-icon"><img id="brandPreview" src="${esc(BRAND.logo_url)}" alt="Current logo"></div>
@@ -1366,7 +1389,10 @@ async function renderAccount() {
               </div>
               <small class="muted">Square pictures work best. PNG with a transparent background, JPG, or SVG.</small>
             </div>
-            <div><button class="btn btn-primary">Save name and logo</button></div>
+            <label class="field"><span>Default appearance for everyone</span><select name="default_theme">
+              ${Object.entries(THEME_LABELS).map(([v, label]) => `<option value="${v}" ${(BRAND.default_theme || "light") === v ? "selected" : ""}>${esc(label)}</option>`).join("")}
+            </select><small class="muted">People can still pick their own under Appearance.</small></label>
+            <div><button class="btn btn-primary">Save name, logo and appearance</button></div>
           </div>
         </form>
         <form class="panel" id="urlForm">
@@ -1411,9 +1437,17 @@ async function renderAccount() {
   $("#signOut")?.addEventListener("click", async () => {
     await api.post("api/auth/logout");
     ME = await api.get("api/auth/me");
+    applyTheme();
     location.hash = "#/";
     renderSignIn();
   });
+  $$("input[name=myTheme]").forEach((r) => r.addEventListener("change", async () => {
+    const before = ME.user.theme;
+    ME.user.theme = r.value;
+    applyTheme();
+    try { await api.put("api/auth/appearance", { theme: r.value }); }
+    catch (err) { ME.user.theme = before; applyTheme(); fail(err); }
+  }));
   $("#pwForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -1495,6 +1529,7 @@ async function boot() {
   try { ME = await api.get("api/auth/me"); }
   catch (err) { ME = { user: null }; }
   await brand;
+  applyTheme();
   applyRole();
   route();
 }

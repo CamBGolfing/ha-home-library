@@ -81,3 +81,30 @@ def test_only_owner_can_change_branding(client, new_client):
     assert ed.post("/api/branding/logo", files=logo_files()).status_code == 403
     assert ed.delete("/api/branding/logo").status_code == 403
     assert new_client().put("/api/branding", json={"name": "Anon"}, headers=CSRF).status_code == 401
+
+
+# ---------------------------------------------------------------- appearance
+
+def test_library_default_is_light_and_owner_can_change_it(client, new_client):
+    assert client.get("/api/branding").json()["default_theme"] == "light"
+    assert 'data-theme="light"' in new_client().get("/").text
+    client.put("/api/branding", json={"name": "Home Library", "default_theme": "auto"})
+    assert 'data-theme="auto"' in new_client().get("/").text
+    assert client.put("/api/branding", json={"name": "X", "default_theme": "purple"}).status_code == 400
+    # Leaving it out keeps the current default.
+    client.put("/api/branding", json={"name": "Renamed"})
+    assert client.get("/api/branding").json()["default_theme"] == "auto"
+
+
+def test_everyone_picks_their_own_appearance(client, new_client):
+    token = client.post("/api/invites", json={"role": "viewer"}).json()["token"]
+    friend = new_client()
+    friend.post(f"/api/auth/invite/{token}", json={"username": "jess", "display_name": "Jess", "password": "password123"})
+    assert friend.get("/api/auth/me").json()["user"]["theme"] == ""          # follows the library default
+    assert friend.put("/api/auth/appearance", json={"theme": "dark"}).status_code == 200
+    assert friend.get("/api/auth/me").json()["user"]["theme"] == "dark"
+    assert client.get("/api/auth/me").json()["user"]["theme"] == ""          # only theirs changed
+    assert friend.put("/api/auth/appearance", json={"theme": "neon"}).status_code == 400
+    friend.put("/api/auth/appearance", json={"theme": ""})
+    assert friend.get("/api/auth/me").json()["user"]["theme"] == ""
+    assert new_client().put("/api/auth/appearance", json={"theme": "dark"}).status_code == 401

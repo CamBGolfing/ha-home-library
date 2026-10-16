@@ -169,6 +169,14 @@ class SettingsIn(BaseModel):
 class BrandingIn(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     short_name: str = Field("", max_length=20)
+    default_theme: str | None = None
+
+
+class AppearanceIn(BaseModel):
+    theme: str = ""   # "" follows the library default
+
+
+THEMES = ("light", "dark", "auto")
 
 
 class RequestIn(BaseModel):
@@ -1010,6 +1018,7 @@ def _branding(conn=None) -> dict:
         version = db.get_setting(c, "logo_version")
         return {"name": name, "short_name": short, "custom_short": bool(db.get_setting(c, "library_short_name")),
                 "custom_logo": bool(version),
+                "default_theme": db.get_setting(c, "default_theme") or "light",
                 "version": version or "default"}
     if conn is not None:
         return read(conn)
@@ -1031,10 +1040,23 @@ def get_branding():
 
 @app.put("/api/branding", dependencies=[Depends(owner)])
 def put_branding(body: BrandingIn):
+    if body.default_theme is not None and body.default_theme not in THEMES:
+        raise HTTPException(400, "Appearance must be light, dark or auto")
     with db.connect() as conn:
         db.set_setting(conn, "library_name", body.name.strip())
         db.set_setting(conn, "library_short_name", body.short_name.strip())
+        if body.default_theme is not None:
+            db.set_setting(conn, "default_theme", body.default_theme)
     return get_branding()
+
+
+@app.put("/api/auth/appearance")
+def set_appearance(body: AppearanceIn, user: dict = Depends(viewer)):
+    if body.theme and body.theme not in THEMES:
+        raise HTTPException(400, "Appearance must be light, dark, auto or blank for the library default")
+    with db.connect() as conn:
+        conn.execute("UPDATE users SET theme = ? WHERE id = ?", (body.theme, user["id"]))
+    return {"theme": body.theme}
 
 
 @app.post("/api/branding/logo", dependencies=[Depends(owner)])
@@ -1116,6 +1138,7 @@ def index():
     html = (INDEX_TEMPLATE
             .replace("{{LIBRARY_NAME}}", escape(b["name"]))
             .replace("{{SHORT_NAME}}", escape(b["short_name"]))
+            .replace("{{THEME}}", b["default_theme"])
             .replace("{{ICON_192}}", f"branding/logo-192.png?v={v}")
             .replace("{{FAVICON}}", f"branding/logo-192.png?v={v}" if b["custom_logo"] else "static/icon.svg"))
     return HTMLResponse(html, headers={"Cache-Control": "no-cache"})

@@ -116,6 +116,7 @@ def public_user(u: dict | None) -> dict | None:
     return {k: u[k] for k in ("id", "username", "display_name", "role", "disabled", "created_at", "last_seen")} | {
         "has_password": bool(u.get("password_hash")),
         "ha_linked": bool(u.get("ha_user_id")),
+        "theme": u.get("theme") or "",
     }
 
 

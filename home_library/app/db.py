@@ -122,6 +122,7 @@ SCHEMA_VERSION = "2"
 ADDED_COLUMNS = {
     "books": [("added_by", "INTEGER REFERENCES users(id) ON DELETE SET NULL")],
     "loans": [("user_id", "INTEGER REFERENCES users(id) ON DELETE SET NULL")],
+    "users": [("theme", "TEXT NOT NULL DEFAULT ''")],   # '' = use the library default
 }
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.0
+
+- Appearance setting. The library now defaults to the light look for everyone, even on phones set to dark mode.
+- Each person can choose Library default, Light, Dark or Match my device on their Account page. The choice is saved to their account, so it follows them to other devices.
+- The owner can change the library-wide default under Account, next to the name and logo.
+- The theme is applied before the page draws, so there's no flash of the wrong colors.
+
 ## 1.3.0
 
 - Name your library and give it your own logo. The owner sets both under Account, with a live preview of the home-screen icon.

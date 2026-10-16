@@ -90,9 +90,11 @@ Tailscale also works if your friends are on your tailnet (share the device with 
 
 On the Account page you can also change anyone's access, turn someone's access off, remove them, or make a password reset link.
 
-### Name and logo
+### Name, logo and appearance
 
 As the owner, open **Account → Library name and logo**. Type a name (and optionally a shorter one for phone home screens), choose a picture, and pick **Fill square** (crops to fit, good for photos) or **Fit inside** (keeps the whole logo with a background color, good for logos). The preview shows how the home-screen icon will look. Click **Save name and logo**.
+
+The same panel sets the **default appearance** for everyone: Light (the default), Dark, or Match my device. Each person can override it for themselves under **Account → Appearance**.
 
 Phones that already added the library to their home screen keep the old icon until they remove it and add it again. The Home Assistant sidebar label ("Library") is set by the add-on and doesn't change.
 
