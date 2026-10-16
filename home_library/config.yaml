@@ -1,5 +1,5 @@
 name: Home Library
-version: "1.4.0"
+version: "1.5.0"
 slug: home_library
 description: Catalog the books in your house. Scan barcodes, pull covers, track loans.
 url: https://github.com/CamBGolfing/ha-home-library
@@ -21,11 +21,29 @@ ports:
 ports_description:
   8099/tcp: Library address for friends (signs in with library accounts). Leave blank unless you are sharing outside Home Assistant.
 backup: hot
+homeassistant_api: true
+services:
+  - mqtt:want
 options:
   ha_user_role: editor
+  notify_services: []
+  notify_on_request: true
+  notify_on_overdue: true
+  notify_on_return: false
+  overdue_check_hour: 9
+  loan_days: 30
+  mqtt_enabled: true
   google_books_api_key: ""
   log_level: info
 schema:
   ha_user_role: list(viewer|editor|owner)
+  notify_services:
+    - str
+  notify_on_request: bool
+  notify_on_overdue: bool
+  notify_on_return: bool
+  overdue_check_hour: int(0,23)
+  loan_days: int(1,365)
+  mqtt_enabled: bool
   google_books_api_key: str?
   log_level: list(debug|info|warning|error)

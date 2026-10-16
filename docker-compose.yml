@@ -13,3 +13,7 @@ services:
     environment:
       - TZ=America/Chicago
       # - GOOGLE_BOOKS_API_KEY=
+      # Optional: publish a Home Library device to an MQTT broker
+      # - MQTT_HOST=192.168.1.10
+      # - MQTT_USERNAME=library
+      # - MQTT_PASSWORD=change-me

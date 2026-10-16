@@ -33,6 +33,10 @@ def app(tmp_path, monkeypatch):
     for m in (db, auth, lookup, main):
         importlib.reload(m)
     auth._failures.clear()
+    from app import events
+    events._settings = None
+    while not events._queue.empty():
+        events._queue.get_nowait()
 
     async def fake_ol(_c, isbn):
         return dict(HOBBIT_OL) if isbn == "9780547928227" else None

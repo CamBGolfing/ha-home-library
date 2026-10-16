@@ -1326,6 +1326,43 @@ function wireBrandForm() {
   });
 }
 
+// Owner-only: how the library is connected to Home Assistant, for setup and troubleshooting.
+async function renderHaPanel() {
+  const el = $("#haPanel");
+  if (!el) return;
+  let s;
+  try { s = await api.get("api/integration"); } catch (err) { el.innerHTML = `<h2>Home Assistant</h2><p class="muted">${esc(err.message)}</p>`; return; }
+  const dot = (ok, warn) => `<span class="status-dot ${ok ? "added" : warn ? "duplicate" : "error"}"></span>`;
+  const mq = s.mqtt;
+  const mqttLine = !s.mqtt_enabled ? [false, true, "MQTT sensors are turned off in the add-on options"]
+    : mq.status === "connected" ? [true, false, `MQTT connected to ${mq.broker}. Look for the Home Library device under Settings, Devices.`]
+    : mq.status === "off" ? [false, true, s.addon ? "MQTT not set up. Install the Mosquitto broker add-on, then restart this add-on." : "MQTT not set up. Set MQTT_HOST to connect to a broker."]
+    : [false, false, `MQTT ${mq.status}${mq.error ? `: ${mq.error}` : ""}${mq.broker ? ` (${mq.broker})` : ""}`];
+  const rows = s.addon ? [
+    mqttLine,
+    [s.ha_api === "ok", false, s.ha_api === "ok" ? "Sending events to Home Assistant" : `Events: ${s.ha_api}`],
+    [s.listener === "connected", s.listener === "connecting", s.listener === "connected" ? "Listening for notification buttons" : `Notification buttons: ${s.listener}`],
+    [s.notify_services.length > 0, true, s.notify_services.length
+      ? `Notifying ${s.notify_services.map((x) => "notify." + x).join(", ")}`
+      : "No phones set for notifications. Add one under notify_services in the add-on's Configuration tab."],
+  ] : [mqttLine, [false, true, "Events and phone notifications work when the library runs as a Home Assistant add-on."]];
+  el.innerHTML = `
+    <h2>Home Assistant</h2>
+    <div class="list">${rows.map(([ok, warn, text]) => `<div class="row" style="padding:8px 0">${dot(ok, warn)}<div class="grow"><p style="color:var(--ink)">${esc(text)}</p></div></div>`).join("")}</div>
+    ${s.addon ? `<div class="btn-row" style="margin-top:12px"><button class="btn btn-sm" id="haTest">Send a test notification</button></div>` : ""}
+    ${s.recent_events.length ? `<details style="margin-top:14px"><summary class="small muted" style="cursor:pointer">Recent events</summary>
+      <div class="list small">${s.recent_events.map((e) => `<div class="row" style="padding:6px 0"><div class="grow"><p style="color:var(--ink)">${esc(e.event)}</p><p>${esc(e.title)}, ${esc(fmtDate(e.at.slice(0, 10)))}</p></div></div>`).join("")}</div></details>` : ""}
+    <p class="small muted" style="margin-top:12px">Lend length ${s.loan_days} days. Overdue check at ${s.overdue_hour}:00. Change these in the add-on's Configuration tab.</p>`;
+  $("#haTest")?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      const r = await api.post("api/integration/test");
+      toast(r.notifications_sent ? `Sent to ${plural(r.notifications_sent, "phone")}` : r.event_fired ? "Event sent, but no phones are set up for notifications" : "Couldn't reach Home Assistant", { error: !r.event_fired });
+    } catch (err) { fail(err); }
+    e.target.disabled = false;
+  });
+}
+
 async function renderAccount() {
   loading();
   const u = ME.user;
@@ -1431,6 +1468,7 @@ async function renderAccount() {
               <button class="btn btn-sm btn-quiet" data-revoke="${i.id}">Cancel</button></div>`).join("")}</div>` : ""}
         </div>
         ${viaHA ? `<p class="small muted">Family members with their own Home Assistant login can open Library from the sidebar and are added here automatically.</p>` : ""}
+        <div class="panel" id="haPanel"><h2>Home Assistant</h2><div class="loading" style="padding:16px"><div class="spinner"></div></div></div>
       </div>` : ""}
     </div>`;
 
@@ -1457,6 +1495,7 @@ async function renderAccount() {
   if (!owner) return;
 
   wireBrandForm();
+  renderHaPanel();
   $("#urlForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     try { await api.put("api/settings", { public_url: new FormData(e.target).get("public_url") }); toast("Address saved"); } catch (err) { fail(err); }

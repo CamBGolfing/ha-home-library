@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, db, lookup
+from . import APP_VERSION, auth, db, events, ha, lookup, mqtt_bridge, ops
 from .auth import editor, owner, viewer
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper())
@@ -30,8 +30,13 @@ MAX_COVER_BYTES = 8 * 1024 * 1024
 @asynccontextmanager
 async def lifespan(_app):
     db.init_db()
-    log.info("Home Library ready, data in %s (running as add-on: %s)", db.DATA_DIR, auth.IS_ADDON)
+    log.info("Home Library %s ready, data in %s (running as add-on: %s)", APP_VERSION, db.DATA_DIR, auth.IS_ADDON)
+    events.start()
+    ha.start_listener()
+    mqtt_bridge.start()
     yield
+    mqtt_bridge.stop()
+    events.stop()
 
 
 app = FastAPI(title="Home Library", docs_url="/api/docs", openapi_url="/api/openapi.json", lifespan=lifespan)
@@ -58,6 +63,8 @@ async def gatekeeper(request: Request, call_next):
     response = await call_next(request)
     if is_api:
         response.headers["Cache-Control"] = "no-store"
+        if request.method not in SAFE_METHODS and response.status_code < 400:
+            events.touch()   # refresh the Home Assistant sensors
     return response
 
 
@@ -282,7 +289,9 @@ async def _create_book(data: BookIn, user: dict) -> dict:
         )
         book_id = cur.lastrowid
         _set_tags(conn, book_id, data.tags)
-        return _get_book(conn, book_id)
+        book = _get_book(conn, book_id)
+    events.emit("book_added", {"book_id": book_id})
+    return book
 
 
 def _check_role(role: str):
@@ -419,6 +428,7 @@ def invite_info(token: str):
 def accept_invite(token: str, body: AccountIn, request: Request, response: Response):
     auth.throttle_check(auth.client_ip(request) + "|invite")
     auth.check_password_rules(body.password)
+    joined = False
     with db.connect() as conn:
         try:
             inv = _load_invite(conn, token)
@@ -440,9 +450,12 @@ def accept_invite(token: str, body: AccountIn, request: Request, response: Respo
                 "INSERT INTO users(username, display_name, password_hash, role) VALUES (?, ?, ?, ?)",
                 (username, body.display_name.strip(), auth.hash_password(body.password), inv["role"]))
             user_id = cur.lastrowid
+            joined = True
         conn.execute("UPDATE invites SET used_at = datetime('now') WHERE id = ?", (inv["id"],))
         session = auth.create_session(conn, user_id)
         user = db.row(conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)))
+    if joined:
+        events.emit("member_joined", {"user_id": user_id})   # after commit, so the worker can see them
     auth.set_session_cookie(response, request, session)
     return {"user": auth.public_user(user)}
 
@@ -549,6 +562,7 @@ def put_settings(body: SettingsIn):
         raise HTTPException(400, "The address should start with https://")
     with db.connect() as conn:
         db.set_setting(conn, "public_url", url)
+    mqtt_bridge.refresh_discovery()
     return {"public_url": url}
 
 
@@ -820,15 +834,7 @@ def list_loans(active: bool = True, user: dict = Depends(viewer)):
     return out
 
 
-def _start_loan(conn, book_id: int, borrower: str, loaned_at: date | None, due_at: date | None,
-                notes: str = "", user_id: int | None = None) -> dict:
-    if conn.execute("SELECT 1 FROM loans WHERE book_id = ? AND returned_at IS NULL", (book_id,)).fetchone():
-        raise HTTPException(409, "This book is already loaned out")
-    cur = conn.execute(
-        "INSERT INTO loans(book_id, borrower, loaned_at, due_at, notes, user_id) VALUES (?, ?, ?, ?, ?, ?)",
-        (book_id, borrower.strip(), (loaned_at or date.today()).isoformat(),
-         due_at.isoformat() if due_at else None, notes, user_id))
-    return db.row(conn.execute("SELECT * FROM loans WHERE id = ?", (cur.lastrowid,)))
+_start_loan = ops.start_loan
 
 
 @app.post("/api/books/{book_id}/loans", status_code=201, dependencies=[Depends(editor)])
@@ -839,7 +845,9 @@ def create_loan(book_id: int, body: LoanIn):
         match = conn.execute("SELECT id FROM users WHERE display_name = ? COLLATE NOCASE AND disabled = 0",
                              (body.borrower.strip(),)).fetchall()
         user_id = match[0][0] if len(match) == 1 else None
-        return _start_loan(conn, book_id, body.borrower, body.loaned_at, body.due_at, body.notes, user_id)
+        loan = _start_loan(conn, book_id, body.borrower, body.loaned_at, body.due_at, body.notes, user_id)
+    events.emit("book_lent", {"loan_id": loan["id"], "via": "app"})
+    return loan
 
 
 @app.post("/api/loans/{loan_id}/return", dependencies=[Depends(editor)])
@@ -848,7 +856,9 @@ def return_loan(loan_id: int):
         cur = conn.execute("UPDATE loans SET returned_at = date('now') WHERE id = ? AND returned_at IS NULL", (loan_id,))
         if not cur.rowcount:
             raise HTTPException(404, "No active loan with that id")
-        return db.row(conn.execute("SELECT * FROM loans WHERE id = ?", (loan_id,)))
+        loan = db.row(conn.execute("SELECT * FROM loans WHERE id = ?", (loan_id,)))
+    events.emit("book_returned", {"loan_id": loan_id})
+    return loan
 
 
 @app.delete("/api/loans/{loan_id}", status_code=204, dependencies=[Depends(editor)])
@@ -893,7 +903,9 @@ def request_book(book_id: int, body: RequestIn, user: dict = Depends(viewer)):
             raise HTTPException(409, "You've already asked for this one")
         cur = conn.execute("INSERT INTO borrow_requests(book_id, user_id, message) VALUES (?, ?, ?)",
                            (book_id, user["id"], body.message.strip()[:500]))
-        return _request_rows(conn, "r.id = ?", [cur.lastrowid])[0]
+        row = _request_rows(conn, "r.id = ?", [cur.lastrowid])[0]
+    events.emit("borrow_requested", {"request_id": row["id"]})
+    return row
 
 
 @app.get("/api/requests")
@@ -905,30 +917,17 @@ def list_requests(user: dict = Depends(viewer)):
                              [user["id"]])
 
 
-def _pending_request(conn, request_id: int) -> dict:
-    r = db.row(conn.execute("SELECT * FROM borrow_requests WHERE id = ? AND status = 'pending'", (request_id,)))
-    if not r:
-        raise HTTPException(404, "That request was already handled")
-    return r
+_pending_request = ops.pending_request
 
 
 @app.post("/api/requests/{request_id}/approve")
 def approve_request(request_id: int, body: ApproveIn, user: dict = Depends(editor)):
-    with db.connect() as conn:
-        r = _pending_request(conn, request_id)
-        who = conn.execute("SELECT display_name FROM users WHERE id = ?", (r["user_id"],)).fetchone()[0]
-        loan = _start_loan(conn, r["book_id"], who, None, body.due_at, r["message"], r["user_id"])
-        conn.execute("UPDATE borrow_requests SET status = 'approved', decided_at = datetime('now'), decided_by = ? "
-                     "WHERE id = ?", (user["id"], request_id))
-        return loan
+    return ops.approve_request(request_id, user["id"], body.due_at)
 
 
 @app.post("/api/requests/{request_id}/decline")
 def decline_request(request_id: int, user: dict = Depends(editor)):
-    with db.connect() as conn:
-        _pending_request(conn, request_id)
-        conn.execute("UPDATE borrow_requests SET status = 'declined', decided_at = datetime('now'), decided_by = ? "
-                     "WHERE id = ?", (user["id"], request_id))
+    ops.decline_request(request_id, user["id"])
     return {"ok": True}
 
 
@@ -1001,6 +1000,40 @@ def export_csv():
                              headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+# ---------------------------------------------------------------- Home Assistant connection
+
+@app.get("/api/integration", dependencies=[Depends(owner)])
+def integration_status():
+    s = events.settings()
+    return {
+        "addon": ha.available(),
+        "ha_api": ha.state["api"],
+        "listener": ha.state["listener"],
+        "last_action": ha.state["last_action"],
+        "mqtt": dict(mqtt_bridge.state),
+        "mqtt_enabled": s.mqtt_enabled,
+        "notify_services": s.notify_services,
+        "notify_on": {"requests": s.notify_on_request, "overdue": s.notify_on_overdue, "returns": s.notify_on_return},
+        "loan_days": s.loan_days,
+        "overdue_hour": s.overdue_hour,
+        "entities": ["sensor.library_books", "sensor.library_on_loan", "binary_sensor.library_overdue",
+                     "sensor.library_borrow_requests", "sensor.library_last_added",
+                     "button.library_lend_oldest_request", "button.library_decline_oldest_request"],
+        "recent_events": events.recent,
+    }
+
+
+@app.post("/api/integration/test", dependencies=[Depends(owner)])
+def integration_test():
+    """Fire a test event and send a test notification to every configured phone."""
+    if not ha.available():
+        raise HTTPException(400, "Home Assistant features only work when the library runs as a Home Assistant add-on")
+    fired = ha.fire_event("home_library_test", {"message": "Test from Home Library"})
+    sent = ha.notify(events.settings().notify_services, _branding()["name"],
+                     "Notifications from the library are working.", {"group": "home_library"})
+    return {"event_fired": fired, "notifications_sent": sent, "notify_services": events.settings().notify_services}
+
+
 # ---------------------------------------------------------------- branding
 
 DEFAULT_NAME = "Home Library"
@@ -1047,6 +1080,7 @@ def put_branding(body: BrandingIn):
         db.set_setting(conn, "library_short_name", body.short_name.strip())
         if body.default_theme is not None:
             db.set_setting(conn, "default_theme", body.default_theme)
+    mqtt_bridge.refresh_discovery()   # the Home Assistant device is named after the library
     return get_branding()
 
 

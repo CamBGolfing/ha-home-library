@@ -5,6 +5,31 @@ configuration:
       What people who open Library from the Home Assistant sidebar can do the first time they visit.
       editor = add, edit and lend books; viewer = browse and ask to borrow. The first person in becomes
       the owner. You can change anyone's access later on the library's Account page.
+  notify_services:
+    name: Phones to notify
+    description: >-
+      Notify services to send library alerts to, without the "notify." part. For example
+      mobile_app_camerons_iphone. Find yours under Developer tools, Actions, by typing "notify.".
+  notify_on_request:
+    name: Notify on borrow requests
+    description: Send a notification with Lend it and Decline buttons when someone asks to borrow a book.
+  notify_on_overdue:
+    name: Notify about overdue books
+    description: Send one summary a day when any books are overdue.
+  notify_on_return:
+    name: Notify when books come back
+    description: Send a notification when a loan is marked returned.
+  overdue_check_hour:
+    name: Overdue check time
+    description: Hour of the day (0 to 23) to check for overdue books and send the summary.
+  loan_days:
+    name: Loan length
+    description: Days until a book is due when you lend it from a notification or the dashboard button.
+  mqtt_enabled:
+    name: MQTT sensors
+    description: >-
+      Publish a Home Library device with sensors and buttons to MQTT (needs the Mosquitto broker add-on).
+      Turn off if you don't use MQTT.
   google_books_api_key:
     name: Google Books API key
     description: Optional. Lookups work without one; a key raises Google's daily request limit.

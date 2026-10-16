@@ -19,6 +19,15 @@ if options_file.exists():
             os.environ.setdefault("LOG_LEVEL", opts["log_level"])
         if opts.get("ha_user_role"):
             os.environ.setdefault("HA_USER_ROLE", opts["ha_user_role"])
+        if opts.get("notify_services"):
+            os.environ.setdefault("NOTIFY_SERVICES", ",".join(opts["notify_services"]))
+        for key in ("notify_on_request", "notify_on_overdue", "notify_on_return", "mqtt_enabled"):
+            if key in opts:
+                os.environ.setdefault(key.upper(), "true" if opts[key] else "false")
+        if "overdue_check_hour" in opts:
+            os.environ.setdefault("OVERDUE_CHECK_HOUR", str(opts["overdue_check_hour"]))
+        if "loan_days" in opts:
+            os.environ.setdefault("LOAN_DAYS", str(opts["loan_days"]))
     except (OSError, ValueError) as e:
         print(f"Could not read add-on options: {e}")
 

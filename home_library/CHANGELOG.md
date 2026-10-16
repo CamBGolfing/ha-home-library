@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0
+
+- Home Assistant integration.
+- A Home Library device over MQTT with sensors for books, books on loan, overdue books, borrow requests and the last book added, plus buttons to lend to or decline the oldest request. The broker login comes from Home Assistant automatically.
+- Events on Home Assistant's bus for borrow requests, loans, declines, returns, overdue books, new books and new members.
+- Phone notifications for borrow requests with Lend it and Decline buttons that work straight from the notification, a daily overdue summary, and optional return alerts. Set the phones under `notify_services`.
+- A Home Assistant status panel on the owner's Account page, with a test notification button.
+
 ## 1.4.0
 
 - Appearance setting. The library now defaults to the light look for everyone, even on phones set to dark mode.

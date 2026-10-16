@@ -47,6 +47,13 @@ If the camera is blocked inside the Home Assistant panel (some browsers and the 
 | Option | What it does |
 | --- | --- |
 | `ha_user_role` | What Home Assistant users can do the first time they open the library: `editor` (add, edit and lend; the default) or `viewer` (browse and ask to borrow). Change anyone later on the Account page. |
+| `notify_services` | Phones to send library alerts to, e.g. `mobile_app_camerons_iphone` (without `notify.`). Find yours in Developer tools → Actions by typing `notify.` |
+| `notify_on_request` | Notify with **Lend it** / **Decline** buttons when someone asks to borrow a book (default on) |
+| `notify_on_overdue` | One summary a day when books are overdue (default on) |
+| `notify_on_return` | Notify when a loan is marked returned (default off) |
+| `overdue_check_hour` | Hour of the day (0 to 23) for the overdue check (default 9) |
+| `loan_days` | Loan length when lending from a notification or dashboard button (default 30) |
+| `mqtt_enabled` | Publish the Home Library device to MQTT (default on; needs the Mosquitto broker add-on) |
 | `google_books_api_key` | Optional. Lookups work without it; a key raises Google's daily request limit. |
 | `log_level` | `debug`, `info`, `warning` or `error`. |
 
@@ -104,6 +111,95 @@ Phones that already added the library to their home screen keep the old icon unt
 - Only expose the direct port over HTTPS (a tunnel or reverse proxy). Don't forward port 8099 on your router as plain HTTP.
 - Turning someone's access off signs them out right away.
 
+## Home Assistant sensors, events and notifications
+
+When the library runs as an add-on it connects to Home Assistant three ways. The owner's **Account** page has a Home Assistant panel showing whether each part is working, with a **Send a test notification** button.
+
+### Setup
+
+1. Make sure the **Mosquitto broker** add-on is installed and the **MQTT** integration is set up. The library gets the broker login from Home Assistant automatically.
+2. In the Home Library add-on's **Configuration** tab, add your phone under `notify_services`, e.g. `mobile_app_camerons_iphone`. Add as many phones as you like.
+3. Restart the add-on. A **Home Library** device appears under Settings → Devices & services → MQTT.
+
+### Entities (MQTT)
+
+| Entity | State | Attributes |
+| --- | --- | --- |
+| `sensor.library_books` | Books owned | `copies`, `wishlist`, `shelves`, `members` |
+| `sensor.library_on_loan` | Books out right now | `loans`: title, borrower, loaned_at, due_at, overdue |
+| `binary_sensor.library_overdue` | On when anything is overdue | `count`, `loans` |
+| `sensor.library_borrow_requests` | Requests waiting for an answer | `requests`: title, requester, message, created_at |
+| `sensor.library_last_added` | Title of the newest book | `authors`, `added_at`, `url` |
+| `button.library_lend_oldest_request` | Lends the oldest requested book that's on the shelf | |
+| `button.library_decline_oldest_request` | Declines the oldest request | |
+
+The values are retained on the broker, so they're back immediately after a Home Assistant restart, and the device shows as unavailable if the library stops.
+
+### Events
+
+Every event is fired on Home Assistant's event bus (and mirrored to MQTT at `home_library/<id>/event/<name>`).
+
+| Event | When | Data |
+| --- | --- | --- |
+| `home_library_borrow_requested` | A friend taps Ask to borrow | `request_id`, `requester`, `message`, `book_id`, `title`, `authors`, `url` |
+| `home_library_book_lent` | A book is lent (from the app, a notification or a button) | `loan_id`, `borrower`, `title`, `due_at`, `via` |
+| `home_library_request_declined` | A request is declined | `request_id`, `requester`, `title`, `via` |
+| `home_library_book_returned` | A loan is marked returned | `loan_id`, `borrower`, `title`, `days_out` |
+| `home_library_loan_overdue` | Once a day for each overdue book | `loan_id`, `borrower`, `title`, `due_at`, `days_overdue` |
+| `home_library_book_added` | A book is added | `book_id`, `title`, `authors`, `added_by`, `status` |
+| `home_library_member_joined` | Someone accepts an invite | `name`, `role` |
+
+`url` is the book's page at your friends' address (when one is set); `ha_path` opens the Library panel in the Home Assistant app.
+
+### Borrow request notifications
+
+With `notify_services` set, a request sends a notification with **Lend it** and **Decline** buttons. Tapping one does it right away: the book is lent for `loan_days` days (or the request is declined), the friend sees it in the app, and the notification disappears from every phone it was sent to. A Home Assistant user whose library access is Friend can't approve.
+
+Prefer your own notification (quiet hours, only to whoever is home, a TTS announcement)? Leave `notify_on_request` off and trigger on the event. Keep the action names and the buttons still work, with no reply automation needed:
+
+```yaml
+alias: Library borrow request
+triggers:
+  - trigger: event
+    event_type: home_library_borrow_requested
+actions:
+  - action: notify.mobile_app_camerons_iphone
+    data:
+      title: "{{ trigger.event.data.requester }} wants to borrow a book"
+      message: "{{ trigger.event.data.title }}"
+      data:
+        tag: "home_library_request_{{ trigger.event.data.request_id }}"
+        actions:
+          - action: "HOME_LIBRARY_APPROVE_{{ trigger.event.data.request_id }}"
+            title: Lend it
+          - action: "HOME_LIBRARY_DECLINE_{{ trigger.event.data.request_id }}"
+            title: Decline
+```
+
+### Dashboard card
+
+```yaml
+type: entities
+title: Library
+entities:
+  - sensor.library_books
+  - sensor.library_on_loan
+  - binary_sensor.library_overdue
+  - sensor.library_borrow_requests
+  - button.library_lend_oldest_request
+```
+
+Or list who has what with a Markdown card:
+
+```yaml
+type: markdown
+title: On loan
+content: >
+  {% for l in state_attr('sensor.library_on_loan', 'loans') or [] %}
+  - **{{ l.title }}**, {{ l.borrower }}{% if l.due_at %}, due {{ l.due_at }}{% endif %}{% if l.overdue %} ⚠️{% endif %}
+  {% else %}Every book is home.{% endfor %}
+```
+
 ## Install on a Raspberry Pi with Docker
 
 ```bash
@@ -151,6 +247,11 @@ WantedBy=multi-user.target
 | `PORT` | `8099` | HTTP port |
 | `GOOGLE_BOOKS_API_KEY` | | Optional Google Books key |
 | `LOG_LEVEL` | `info` | Logging level |
+| `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD` | | Connect to an MQTT broker for the Home Library device (outside Home Assistant add-ons) |
+| `MQTT_ENABLED` | `true` | Set to `false` to turn MQTT off |
+| `LOAN_DAYS` | `30` | Loan length for the MQTT "lend oldest request" button |
+
+Events and phone notifications go through Home Assistant's Supervisor, so they only work when the library runs as an add-on. With plain Docker you still get the MQTT device.
 
 ## Backups
 
@@ -188,6 +289,10 @@ home_library/            The add-on (also the Docker build context)
     main.py              FastAPI routes
     db.py                SQLite schema and migrations
     auth.py              Accounts, sessions, roles, Home Assistant sign-in
+    events.py            Background worker: events, notifications, sensor snapshots
+    ha.py                Home Assistant API and notification button listener
+    mqtt_bridge.py       MQTT device discovery, state and buttons
+    ops.py               Lending actions shared by the app, notifications and buttons
     lookup.py            Open Library + Google Books lookups, ISBN helpers
     static/              Front end (plain JS, no build step)
 tests/                   API tests (network stubbed)
